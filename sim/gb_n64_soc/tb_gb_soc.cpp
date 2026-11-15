@@ -321,6 +321,12 @@ static long        g_cur_frame_pixels = 0;
 static long        g_last_frame_pixels= 0;
 static long        g_nonblack_pixels  = 0;
 static bool        g_prev_vblank      = true;
+static bool        g_prev_hblank      = true;
+static int         g_fb_x             = 0;
+static int         g_fb_y             = 0;
+static uint8_t     g_fb_cur[320 * 240 * 3];
+static uint8_t     g_fb_latched[320 * 240 * 3];
+static bool        g_fb_has_frame     = false;
 static long        g_nonzero_audio    = 0;
 static long        g_vibrate_cycles   = 0;
 
@@ -518,7 +524,26 @@ static void step_half_sys(bool sys_edge) {
             }
         }
         bool vb = dut->video_vblank != 0;
+        bool hb = dut->video_hblank != 0;
+        if (!vb && g_prev_vblank) {
+            g_fb_x = 0;
+            g_fb_y = 0;
+            memset(g_fb_cur, 0, sizeof(g_fb_cur));
+        } else if (hb && !g_prev_hblank && !vb) {
+            g_fb_x = 0;
+            g_fb_y++;
+        }
         if (dut->video_dataEnable && !vb) {
+            if (g_fb_x >= 0 && g_fb_x < 320 && g_fb_y >= 0 && g_fb_y < 240) {
+                uint8_t r6 = dut->video_data_r & 0x3Fu;
+                uint8_t g6 = dut->video_data_g & 0x3Fu;
+                uint8_t b6 = dut->video_data_b & 0x3Fu;
+                size_t idx = ((size_t)g_fb_y * 320u + (size_t)g_fb_x) * 3u;
+                g_fb_cur[idx + 0] = (uint8_t)((r6 << 2) | (r6 >> 4));
+                g_fb_cur[idx + 1] = (uint8_t)((g6 << 2) | (g6 >> 4));
+                g_fb_cur[idx + 2] = (uint8_t)((b6 << 2) | (b6 >> 4));
+            }
+            g_fb_x++;
             g_cur_frame_pixels++;
             if (dut->video_data_r != 0 || dut->video_data_g != 0 || dut->video_data_b != 0)
                 g_nonblack_pixels++;
@@ -527,8 +552,11 @@ static void step_half_sys(bool sys_edge) {
             g_last_frame_pixels = g_cur_frame_pixels;
             g_cur_frame_pixels  = 0;
             g_vid_frames++;
+            memcpy(g_fb_latched, g_fb_cur, sizeof(g_fb_latched));
+            g_fb_has_frame = true;
         }
         g_prev_vblank = vb;
+        g_prev_hblank = hb;
 
         if (dut->audio_left != 0 || dut->audio_right != 0) g_nonzero_audio++;
         if (dut->vibrate_mode != 0) g_vibrate_cycles++;
@@ -609,12 +637,16 @@ int main(int argc, char **argv) {
     std::string savedb_path = "assets/n64savedb.txt";
     int pak_setting = 1; // 1 = Controller Pak, 2 = Rumble Pak
     bool test_restart = false;
+    std::string dump_ppm;
+    long max_frames = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) mode = argv[++i];
         else if (strcmp(argv[i], "--file") == 0 && i + 1 < argc) arg_file = argv[++i];
         else if (strcmp(argv[i], "--pak") == 0 && i + 1 < argc) pak_setting = atoi(argv[++i]);
         else if (strcmp(argv[i], "--test-restart") == 0) test_restart = true;
+        else if (strcmp(argv[i], "--dump-ppm") == 0 && i + 1 < argc) dump_ppm = argv[++i];
+        else if (strcmp(argv[i], "--max-frames") == 0 && i + 1 < argc) max_frames = atol(argv[++i]);
     }
 
     // Initialize inputs & hold reset for 24 sys cycles
@@ -662,6 +694,11 @@ int main(int argc, char **argv) {
         long limit = 3500000L;
         while (g_sys < limit && dut->tb_diag_pass_cnt < 1) {
             step_sys_cycle();
+        }
+        if (!dump_ppm.empty() && dut->tb_diag_pass_cnt >= 1) {
+            long target_f = g_vid_frames + 2;
+            long flim = g_sys + 2500000L;
+            while (g_sys < flim && g_vid_frames < target_f) step_sys_cycle();
         }
         if (dut->tb_diag_pass_cnt < 1) TEST_ERR("N64MemDiagCore did not complete pass 1");
         if (dut->tb_diag_any_err != 0) TEST_ERR("N64MemDiagCore reported hardware errors: 0x%x", dut->tb_diag_any_err);
@@ -719,10 +756,11 @@ int main(int argc, char **argv) {
         host_cmd(0x0100u);
 
         long limit = 180000000L;
-        while (g_sys < limit && !g_saw_eot) {
+        while (g_sys < limit && !g_saw_eot && !(max_frames > 0 && g_vid_frames >= max_frames)) {
             step_sys_cycle();
         }
-        if (!g_saw_eot) TEST_ERR("mipstest %s timed out without EOT (uart='%s')", arg_file.c_str(), g_uart_log.c_str());
+        if (!g_saw_eot && !(max_frames > 0 && g_vid_frames >= max_frames))
+            TEST_ERR("mipstest %s timed out without EOT (uart='%s')", arg_file.c_str(), g_uart_log.c_str());
         if (g_uart_log.find("FAIL") != std::string::npos)
             TEST_ERR("mipstest %s reported FAIL:\n%s", arg_file.c_str(), g_uart_log.c_str());
 
@@ -849,6 +887,15 @@ int main(int argc, char **argv) {
                    mode.c_str(), arg_file.c_str(), pak_setting, (int)test_restart,
                    sdr_peek_word(report_w0 + 2), g_sram.cnt_l2_reads, g_vid_frames,
                    g_nonzero_audio, g_vibrate_cycles, g_cmd_core_read_cnt, g_ac_errors);
+        }
+    }
+
+    if (!dump_ppm.empty() && g_fb_has_frame) {
+        FILE *fp = fopen(dump_ppm.c_str(), "wb");
+        if (fp) {
+            fprintf(fp, "P6\n320 240\n255\n");
+            fwrite(g_fb_latched, 1, sizeof(g_fb_latched), fp);
+            fclose(fp);
         }
     }
 
