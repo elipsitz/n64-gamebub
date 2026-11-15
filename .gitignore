@@ -4,3 +4,6 @@ dist/
 *.log
 *.jou
 *.str
+sim/**/obj*
+sim/**/*.log
+dist/
