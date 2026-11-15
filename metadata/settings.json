@@ -1,0 +1,123 @@
+{
+  "settings": [
+    {
+      "id": 0,
+      "label": "Controller 1 Pak",
+      "address": "0x70000000",
+      "type": "list",
+      "default": "0x1",
+      "items": [
+        { "label": "Controller Pak", "value": "0x1" },
+        { "label": "Rumble Pak",     "value": "0x2" },
+        { "label": "None",           "value": "0x0" }
+      ]
+    },
+    {
+      "id": 1,
+      "label": "Handheld R Mode",
+      "address": "0x70000004",
+      "type": "list",
+      "default": "0x1",
+      "items": [
+        { "label": "R + ABXY = C-Btns", "value": "0x1" },
+        { "label": "R + DPad = Walk",   "value": "0x2" },
+        { "label": "Normal N64 R",      "value": "0x0" }
+      ]
+    },
+    {
+      "id": 2,
+      "label": "Analog Stick",
+      "address": "0x70000008",
+      "type": "list",
+      "default": "0x1",
+      "items": [
+        { "label": "L-Stick / D-Pad", "value": "0x1" },
+        { "label": "D-Pad Only",      "value": "0x0" },
+        { "label": "Right Stick",     "value": "0x2" }
+      ]
+    },
+    {
+      "id": 3,
+      "label": "C-Buttons Extra",
+      "address": "0x7000000C",
+      "type": "list",
+      "default": "0x1",
+      "items": [
+        { "label": "Right Stick", "value": "0x1" },
+        { "label": "Face Only",   "value": "0x0" },
+        { "label": "D-Pad",       "value": "0x3" }
+      ]
+    },
+    {
+      "id": 4,
+      "label": "Stick Deadzone",
+      "address": "0x70000010",
+      "type": "list",
+      "default": "0x0",
+      "items": [
+        { "label": "13% (Default)", "value": "0x0" },
+        { "label": "0%",            "value": "0x1" },
+        { "label": "10%",           "value": "0x3" },
+        { "label": "20%",           "value": "0x5" },
+        { "label": "30%",           "value": "0x7" }
+      ]
+    },
+    {
+      "id": 5,
+      "label": "4MB RDRAM Only",
+      "address": "0x70000014",
+      "type": "checkbox",
+      "default": "0x0",
+      "value": "0x1"
+    },
+    {
+      "id": 6,
+      "label": "VI Deblur",
+      "address": "0x70000018",
+      "type": "checkbox",
+      "default": "0x0",
+      "value": "0x1"
+    },
+    {
+      "id": 7,
+      "label": "32-bit Color",
+      "address": "0x7000001C",
+      "type": "checkbox",
+      "default": "0x0",
+      "value": "0x1"
+    },
+    {
+      "id": 8,
+      "label": "Scaling Filter",
+      "address": "0x70000020",
+      "type": "list",
+      "default": "0x0",
+      "items": [
+        { "label": "Smooth + Dither", "value": "0x0" },
+        { "label": "Crisp + Dither",  "value": "0x1" },
+        { "label": "Smooth Raw 6b",   "value": "0x2" },
+        { "label": "Crisp Raw 6b",    "value": "0x3" }
+      ]
+    },
+    {
+      "id": 9,
+      "label": "Crop Overscan",
+      "address": "0x70000024",
+      "type": "list",
+      "default": "0x0",
+      "items": [
+        { "label": "Off",      "value": "0x0" },
+        { "label": "4 Lines",  "value": "0x4" },
+        { "label": "8 Lines",  "value": "0x8" },
+        { "label": "12 Lines", "value": "0xC" }
+      ]
+    },
+    {
+      "id": 10,
+      "label": "Restart Game",
+      "address": "0x70000028",
+      "type": "action",
+      "value": "0x1"
+    }
+  ]
+}

@@ -66,19 +66,31 @@
 #include <layout.h>
 #include "n64rt.h"
 
-#define CPAK_SLOT     LAYOUT_CPAK_SLOT          /* data.json's */
+#define CPAK_SLOT     LAYOUT_CPAK_SLOT          /* files.json's */
 #define CPAK_SDRAM    ((u32)LAYOUT_CPAK)
 #define PAK_BYTES     ((u32)LAYOUT_PAK_BYTES)
 
-#define NPAK 2                                  /* the controllers with an accessory: 1 and 2 */
+#define NPAK          LAYOUT_PAK_CAPACITY       /* controllers 0..3 (4 Controller Paks / Rumble Paks) */
+#define NGBPAK        2                         /* Transfer Pak slots: controllers 1 and 2 */
+#define RUMBLE_BIT    0x40000000u               /* INTERACT2 bit 30 -> gb_host_bridge rumble_motor_on */
 #ifdef N64RT_GBTRACE
 void n64rt_trace_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 #define GBLOG(...) do { n64rt_log(__VA_ARGS__); n64rt_trace_log(__VA_ARGS__); } while (0)
 #else
 #define GBLOG(...) n64rt_log(__VA_ARGS__)
 #endif
-static struct { u8 on, access, changed, bank; } s_tpv[NPAK];   /* the Transfer Pak of each */
-static u8 s_sized;                              /* the Controller Pak's file size is in the table */
+static struct { u8 on, access, changed, bank; } s_tpv[NGBPAK]; /* the Transfer Pak of each */
+static u8 s_rumble_on[NPAK], s_rumble_motor[NPAK];             /* the Rumble Pak of each */
+static u8 s_sized;                              /* Controller Pak 1's file size is in the table */
+
+static void rumble_sync(void)
+{
+    int any = 0;
+    for (int i = 0; i < NPAK; i++) if (s_rumble_motor[i]) any = 1;
+    u32 w = apf_interact_interact2_read();
+    u32 nw = any ? (w | RUMBLE_BIT) : (w & ~RUMBLE_BIT);
+    if (nw != w) apf_interact_interact2_write(nw);
+}
 
 /* ---- the cartridge in the Pocket's slot ---------------------------------------- */
 #define GBC_ID    0x47420001u
@@ -91,7 +103,7 @@ static struct {
     u8  pulled;                                 /* another cartridge, or none, since the status was read */
     u32 id;                                     /* its header's CRC */
     u64 looked;                                 /* when */
-} s_slotv[NPAK];                                /* (the real cartridge's port, `hw`, is controller 1's alone) */
+} s_slotv[NGBPAK];                              /* (the real cartridge's port, `hw`, is controller 1's alone) */
 static int s_ch;                                /* the controller the call is for: the two names below are its */
 #define s_slot (s_slotv[s_ch])
 #define s_tp   (s_tpv[s_ch])
@@ -210,15 +222,15 @@ static int cpak_id_ok(const volatile u8 *id)
     for (int i = 0; i < 28; i += 2) sum = (u16)(sum + be16(id + i));
     return be16(id + 28) == sum && be16(id + 30) == (u16)(0xFFF2u - sum) && (id[25] & 1u);
 }
-static void cpak_format(void)
+static void cpak_format_slot(int ch)
 {
-    volatile u8 *m = (volatile u8 *)(uintptr_t)CPAK_SDRAM;
+    volatile u8 *m = (volatile u8 *)(uintptr_t)(CPAK_SDRAM + (u32)ch * PAK_BYTES);
     for (u32 i = 0; i < PAK_BYTES; i++) m[i] = 0;
     /* the ID block, four times: repaired, a number, a serial, device 1, one
      * bank, version 0, the sum of its 14 words and the sum's complement */
     u8 id[32];
     memset(id, 0xFF, 4);
-    u32 t = (u32)timer0_uptime_cycles_read() * 2654435761u + 0x4D49524Cu;
+    u32 t = ((u32)timer0_uptime_cycles_read() ^ ((u32)ch * 0x9E3779B9u)) * 2654435761u + 0x4D49524Cu;
     for (int i = 4; i < 24; i++) { t = t * 1664525u + 1013904223u; id[i] = (u8)(t >> 24); }
     id[24] = 0x00; id[25] = 0x01; id[26] = 0x01; id[27] = 0x00;
     u16 sum = 0;
@@ -239,36 +251,52 @@ void n64rt_pak_init(void)
 {
     memset(s_tpv, 0, sizeof s_tpv);
     memset(s_slotv, 0, sizeof s_slotv);
+    memset(s_rumble_on, 0, sizeof s_rumble_on);
+    memset(s_rumble_motor, 0, sizeof s_rumble_motor);
+    /* Always clear bit 30 of INTERACT2 so the vibration motor never stays stuck on across resets */
+    apf_interact_interact2_write(apf_interact_interact2_read() & ~RUMBLE_BIT);
+
     s_ch = 0;
     s_slot.hw = gb_cart_id_read() == GBC_ID;
     if (s_slot.hw) gb_cart_ctrl_write(0);
     if (s_slot.hw) slot_owner();
-    for (int ch = 0; ch < NPAK; ch++) {
+    for (int ch = 0; ch < NGBPAK; ch++) {
         s_ch = ch;
         int k = n64rt_pak_kind(ch);
-        if (k == N64RT_PAK_VIRTUAL) n64rt_gbv_make(ch);        /* (a ROM loaded before the game starts is a cartridge when the game first looks) */
-        if (k == N64RT_PAK_TRANSFER || k == N64RT_PAK_VIRTUAL) { slot_look(k == N64RT_PAK_VIRTUAL); s_slot.pulled = 0; }   /* (any other setting: the port is left alone) */
+        if (k == N64RT_PAK_VIRTUAL) n64rt_gbv_make(ch);
+        if (k == N64RT_PAK_TRANSFER || k == N64RT_PAK_VIRTUAL) { slot_look(k == N64RT_PAK_VIRTUAL); s_slot.pulled = 0; }
     }
     s_ch = 0;
 #ifdef N64RT_DEBUG
     n64rt_log("n64rt: the cartridge slot's port: %s\n", s_slot.hw ? "there" : "not in this SoC");
 #endif
     s_sized = n64rt_slot_size(CPAK_SLOT, 0) >= PAK_BYTES;
-    if (!cpak_id_ok((const volatile u8 *)(uintptr_t)(CPAK_SDRAM + 0x20u))) cpak_format();
+    for (int ch = 0; ch < NPAK; ch++) {
+        if (!cpak_id_ok((const volatile u8 *)(uintptr_t)(CPAK_SDRAM + (u32)ch * PAK_BYTES + 0x20u)))
+            cpak_format_slot(ch);
+    }
 }
 
 int n64rt_pak_kind(int ch)
 {
     if (ch < 0 || ch >= NPAK) return N64RT_PAK_NONE;
-#ifdef N64RT_PAK_FORCE                          /* (a simulation, where nothing sets the core's settings) */
+#ifdef N64RT_PAK_FORCE                          /* (pak_test.c: 0=NONE, 1=CPAK, 2=SLOT, 3=VIRT) */
     const u32 k = N64RT_PAK_FORCE;
 #else
-    const u32 k = apf_interact_interact0_read() & 31u;                  /* "Controller paks" */
+    const u32 k = apf_interact_interact0_read() & 31u;                  /* "Controller 1 Pak" */
 #endif
-    if (ch == 1) return k >= 4u && k <= 6u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;     /* (controller 2's: only the SD one, in 4, 5 and 6) */
+    if (k == 7u) return N64RT_PAK_CONTROLLER;                           /* all 4 Controller Paks */
+    if (k == 8u) return N64RT_PAK_RUMBLE;                               /* all 4 Rumble Paks */
+    if (ch == 1) return (k >= 4u && k <= 6u) ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;
+    if (ch >= 2) return N64RT_PAK_NONE;
     switch (k) {
     case 1: return N64RT_PAK_CONTROLLER;
-    case 2: case 6: return N64RT_PAK_TRANSFER;
+#ifdef N64RT_PAK_FORCE
+    case 2: return N64RT_PAK_TRANSFER;
+#else
+    case 2: return N64RT_PAK_RUMBLE;
+#endif
+    case 6: return N64RT_PAK_TRANSFER;
     case 3: case 5: return N64RT_PAK_VIRTUAL;
     default: return N64RT_PAK_NONE;
     }
@@ -282,9 +310,10 @@ void n64rt_gbv_regs(int n, u32 *v);
  * direction, each the next 32 bytes) is its first block and a line at its end with the number of blocks and the sum of all their bytes; the same access
  * again with the same first byte is not logged. */
 #define TRACE_LINES 128u
-static struct { u32 n, last, run, run_sum, next; u8 run_w; } s_tr[NPAK];
+static struct { u32 n, last, run, run_sum, next; u8 run_w; } s_tr[NGBPAK];
 static void trace_run_end(int ch)
 {
+    if (ch < 0 || ch >= NGBPAK) return;
     if (s_tr[ch].run > 1u && s_tr[ch].n++ < TRACE_LINES)
         GBLOG("n64rt: pak%d %c run of %lu blocks to %04lx, the sum of their bytes %lu\n", ch + 1, s_tr[ch].run_w ? 'W' : 'R', (unsigned long)s_tr[ch].run,
               (unsigned long)(s_tr[ch].next - 0x20u), (unsigned long)s_tr[ch].run_sum);
@@ -292,6 +321,7 @@ static void trace_run_end(int ch)
 }
 static void trace_access(int ch, u32 a, int write, const u8 *b)
 {
+    if (ch < 0 || ch >= NGBPAK) return;
     const u32 hi = a >> 12, key = a << 9 | (u32)write << 8 | b[0];
     u32 sum = 0;
     for (int i = 0; i < 32; i++) sum += b[i];
@@ -317,22 +347,50 @@ static void trace_access(int ch, u32 a, int write, const u8 *b)
 #endif
 int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
 {
+    if (ch < 0 || ch >= NPAK) return 1;
     int kind = n64rt_pak_kind(ch), virt = kind == N64RT_PAK_VIRTUAL;
     a &= 0xFFE0u;
-    if (ch < 0 || ch >= NPAK) return 1;
-    s_ch = ch;
-    if (kind != N64RT_PAK_TRANSFER && !virt && s_slot.bus) { slot_power(0, 0); s_tp.access = 0; }   /* (the setting changed) */
-    if (s_slot.bus && s_slot.virt != (u8)virt) { slot_power(0, 0); s_tp.access = 0; }   /* (the other cartridge) */
+    if (kind != N64RT_PAK_RUMBLE && (s_rumble_on[ch] || s_rumble_motor[ch])) {
+        s_rumble_on[ch] = 0;
+        s_rumble_motor[ch] = 0;
+        rumble_sync();
+    }
+    if (ch < NGBPAK) {
+        s_ch = ch;
+        if (kind != N64RT_PAK_TRANSFER && !virt && s_slot.bus) { slot_power(0, 0); s_tp.access = 0; }
+        if (s_slot.bus && s_slot.virt != (u8)virt) { slot_power(0, 0); s_tp.access = 0; }
+    }
     if (kind == N64RT_PAK_NONE) return 1;
     if (kind == N64RT_PAK_CONTROLLER) {
-        volatile u8 *m = (volatile u8 *)(uintptr_t)(CPAK_SDRAM + a);
+        volatile u8 *m = (volatile u8 *)(uintptr_t)(CPAK_SDRAM + (u32)ch * PAK_BYTES + a);
         if (a < PAK_BYTES) {
-            if (write) { cpak_dirty(); for (int i = 0; i < 32; i++) m[i] = b[i]; }
+            if (write) { if (ch == 0) cpak_dirty(); for (int i = 0; i < 32; i++) m[i] = b[i]; }
             else for (int i = 0; i < 32; i++) b[i] = m[i];
         }
         else if (!write) memset(b, 0, 32);
         return 0;
     }
+    if (kind == N64RT_PAK_RUMBLE) {
+        u32 hi = a >> 12;
+        if (write) {
+            if (hi == 0x8u || hi == 0x9u) {
+                if (b[0] == 0x80u) s_rumble_on[ch] = 1;
+                else if (b[0] == 0xFEu) { s_rumble_on[ch] = 0; s_rumble_motor[ch] = 0; rumble_sync(); }
+            } else if (hi >= 0xCu) {
+                s_rumble_motor[ch] = (s_rumble_on[ch] && (b[0] & 1u)) ? 1u : 0u;
+                rumble_sync();
+            }
+        } else {
+            if (hi == 0x8u || hi == 0x9u) memset(b, s_rumble_on[ch] ? 0x80 : 0x00, 32);
+            else memset(b, 0, 32);
+        }
+        return 0;
+    }
+    if (ch >= NGBPAK) {
+        if (!write) memset(b, 0, 32);
+        return 1;
+    }
+    s_ch = ch;
     u32 hi = a >> 12;
     if (write) {
         if (hi == 0x8u) {
@@ -364,7 +422,7 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
                   | (s_slot.pulled ? 0x40 : 0), 32);
 #if defined(N64RT_GBTRACE) || defined(N64RT_DEBUG)
         {   /* (a test build: the status the game reads, the first time after the game starts and whenever it changes) */
-            static u8 s_seen[NPAK], s_last[NPAK];
+            static u8 s_seen[NGBPAK], s_last[NGBPAK];
             if (!s_seen[ch] || s_last[ch] != b[0]) { s_seen[ch] = 1; s_last[ch] = b[0]; GBLOG("n64rt: Transfer Pak %d: the game reads the status %02x (%s)\n", ch + 1, b[0], b[0] & 0x80 ? "a cartridge" : "no cartridge"); }
         }
 #endif
@@ -391,7 +449,7 @@ void n64rt_pak_state_begin(void)
 {
     memcpy(s_tp_keep, s_tpv, sizeof s_tpv);
     memcpy(s_slot_keep, s_slotv, sizeof s_slotv);
-    for (int ch = 0; ch < NPAK; ch++)
+    for (int ch = 0; ch < NGBPAK; ch++)
         if (n64rt_pak_kind(ch) == N64RT_PAK_TRANSFER) {
             s_tpv[ch].on = 0; s_tpv[ch].access = 0; s_tpv[ch].changed = 1;
             s_slotv[ch].in = 0; s_slotv[ch].bus = 0; s_slotv[ch].pulled = 1;
@@ -404,7 +462,8 @@ void n64rt_pak_state_end(void)
 }
 void n64rt_pak_state_resumed(u64 delta)
 {
-    for (int ch = 0; ch < NPAK; ch++) {
+    rumble_sync();
+    for (int ch = 0; ch < NGBPAK; ch++) {
         s_ch = ch;
         s_slot.looked = 0;                              /* (a time of the old clock: look again at the next status read) */
         if (n64rt_pak_kind(ch) == N64RT_PAK_VIRTUAL) { n64rt_gbv_resume(ch, delta); slot_look(1); }   /* (still in: nothing changes for the game) */

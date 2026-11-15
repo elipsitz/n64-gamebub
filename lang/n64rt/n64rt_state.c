@@ -580,7 +580,11 @@ void n64rt_state_event(void)
  * hold) is unplugged in the state; the SD one's RAM and registers are in it (n64rt_pak.c, n64rt_gbvirt.c) */
 void n64rt_state_poll(void)
 {
+#ifdef N64RT_POCKET_SAVESTATE
     const u32 ok = 1u;
     if ((apf_bridge_savestate_read() & 1u) != ok) apf_bridge_savestate_write(ok);
     if (!(apf_bridge_transfer_length_read() >> 20 & 0xFu)) apf_bridge_transfer_length_write(LAYOUT_STATE_BYTES);   /* (the size told until a state says its own) */
+#else
+    if (apf_bridge_savestate_read() & 1u) apf_bridge_savestate_write(0);
+#endif
 }

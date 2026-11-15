@@ -1,0 +1,53 @@
+{
+  "files": [
+    {
+      "id": 0,
+      "label": "ROM",
+      "extensions": ["z64", "n64", "v64"],
+      "user_selected": true,
+      "optional": false,
+      "read_only": true,
+      "address": "0x00100000",
+      "max_size": "0x03400000",
+      "max_transfer_speed": 20000
+    },
+    {
+      "id": 1,
+      "label": "Save",
+      "extensions": ["sav"],
+      "dependent_on_0": true,
+      "optional": true,
+      "initialize": true,
+      "address": "0x34140000",
+      "max_size": "0x00020000"
+    },
+    {
+      "id": 2,
+      "label": "Controller Pak",
+      "extensions": ["mpk"],
+      "dependent_on_0": true,
+      "optional": true,
+      "initialize": true,
+      "address": "0x34108000",
+      "max_size": "0x00008000"
+    },
+    {
+      "id": 3,
+      "label": "Runtime",
+      "filename": "n64rt.sys",
+      "optional": false,
+      "read_only": true,
+      "address": "0x00000000",
+      "max_size": "0x00100000"
+    },
+    {
+      "id": 4,
+      "label": "Save DB",
+      "filename": "n64savedb.txt",
+      "optional": true,
+      "read_only": true,
+      "address": "0x34130000",
+      "max_size": "0x00010000"
+    }
+  ]
+}

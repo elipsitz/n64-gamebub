@@ -1,0 +1,21 @@
+{
+  "metadata": {
+    "id": "GameBub.N64",
+    "name": "Nintendo 64",
+    "author": "Game Bub / MIRLO64",
+    "version": "0.1.0",
+    "release_date": "2026-11-15",
+    "url": "https://github.com/tortugaveloz/MIRLO64",
+    "license": "Apache-2.0"
+  },
+  "bitstreams": [
+    {
+      "target": "gamebub_rev4",
+      "filename": "N64Core-gamebub_rev4.bit"
+    }
+  ],
+  "hardware": {
+    "cartridge_enable": "no",
+    "cartridge_selectable": false
+  }
+}

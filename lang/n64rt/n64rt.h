@@ -263,10 +263,12 @@ void n64rt_run(const n64rt_game_t *g) __attribute__((noreturn));
  * reads of the ROM, decoded as the game's are. n64rt_rom_word() and
  * n64rt_rom_copy() read it. */
 #define N64RT_ROM_FILE_OFF 0x00100000u
-#define N64RT_ROM_SPLIT 0x01E00000u    /* ROM offsets below this are in PSRAM */
+#define N64RT_ROM_SPLIT    0x00000000u /* Game Bub: all resident ROM lives in SDRAM (0 in PSRAM) */
 #define N64RT_ROM_WIN      0x30000000u
 u32  n64rt_rom_word(u32 off);
 void n64rt_rom_copy(void *dst, u32 off, u32 size);
+u32  n64rt_rom_resident_limit(void);
+u32  n64rt_ondemand_probe(void);
 /* the random word an open-source IPL3 collects while it boots and leaves in DMEM (n64rt_boot.c) */
 extern u32 n64rt_boot_entropy;
 void n64rt_boot_game_file(n64rt_game_t *g) __attribute__((noreturn));
@@ -300,7 +302,7 @@ void n64rt_io_init(void);
 extern u32 n64rt_yield_wait_ms;            /* a port's: a graphics task's yield held back this long (n64rt_rsp.c) */
 /* the accessories of controllers 1 and 2 (n64rt_pak.c): the game's own osPfs* and osGbpak*
  * run on these blocks */
-enum { N64RT_PAK_NONE, N64RT_PAK_CONTROLLER, N64RT_PAK_TRANSFER, N64RT_PAK_VIRTUAL };   /* (the "Controller paks" setting's kinds: n64rt_pak.c) */
+enum { N64RT_PAK_NONE, N64RT_PAK_CONTROLLER, N64RT_PAK_TRANSFER, N64RT_PAK_VIRTUAL, N64RT_PAK_RUMBLE };   /* (the "Controller paks" setting's kinds: n64rt_pak.c) */
 void n64rt_pak_init(void);
 int  n64rt_pak_kind(int ch);
 int  n64rt_pak_rw(int ch, u32 addr, u8 *block, int write);

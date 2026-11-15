@@ -1,0 +1,16 @@
+{
+  "metadata": {
+    "id": "GameBub.N64MemDiag",
+    "name": "N64 Memory & Phase Diag",
+    "author": "Game Bub / MIRLO64",
+    "version": "0.1.0",
+    "release_date": "2026-11-15",
+    "license": "Apache-2.0"
+  },
+  "bitstreams": [
+    {
+      "target": "gamebub_rev4",
+      "filename": "N64MemDiagCore-gamebub_rev4.bit"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "settings": [
+    {
+      "id": 0,
+      "label": "SDRAM Clk Phase",
+      "address": "0x7000002C",
+      "type": "list",
+      "default": "0x0",
+      "items": [
+        { "label": "-135 deg (0 ps)",   "value": "0x00" },
+        { "label": "-90 deg (+1000ps)", "value": "0x2A" },
+        { "label": "-112 deg (+500ps)", "value": "0x15" },
+        { "label": "-157 deg (-500ps)", "value": "0xEB" },
+        { "label": "-180 deg (-1000ps)","value": "0xD6" },
+        { "label": "-202 deg (-1500ps)","value": "0xC1" },
+        { "label": "-67 deg (+1500ps)", "value": "0x3F" }
+      ]
+    },
+    {
+      "id": 1,
+      "label": "Restart Mem Test",
+      "address": "0x70000028",
+      "type": "action",
+      "value": "0x1"
+    }
+  ]
+}

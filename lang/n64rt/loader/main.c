@@ -8,6 +8,7 @@
  * and its TLB exceptions itself, and the save's kind is what the game does (n64rt_io.c). Build: lang/n64rt/Makefile. */
 #include <stdio.h>
 #include <system.h>
+#include <layout.h>
 #include <generated/csr.h>
 #include "n64rt.h"
 
@@ -16,18 +17,18 @@
 #define GAME_MEM 0x800000u              /* (the console has the Expansion Pak: a valid machine for every game) */
 #endif
 
-/* nothing to run: a plain screen says why to a Pocket with no cable on it
- * (red: no .z64 there; yellow: a game this build does not know) */
+/* nothing to run: a plain screen in LAYOUT_RDRAM (never scribbles over resident ROM) */
 static void stop(const char *why, u16 colour) __attribute__((noreturn));
 static void stop(const char *why, u16 colour)
 {
     apf_bridge_savestate_write(0);              /* (no game: no save state, n64rt_state.c) */
     printf("loader: %s\n", why);
-    volatile u16 *fb = (volatile u16 *)(uintptr_t)0x40C00000u;
+    volatile u16 *fb = (volatile u16 *)(uintptr_t)LAYOUT_RDRAM;
     for (u32 i = 0; i < 320u * 240u; i++) fb[i] = colour;
+    flush_cpu_dcache_range((const void *)fb, 320u * 240u * 2u);
     video_framebuffer_vtg_mode_write(1);
     video_framebuffer_width_write(0);
-    video_framebuffer_dma_base_write(0x40C00000u);
+    video_framebuffer_dma_base_write(LAYOUT_RDRAM);
     video_framebuffer_vtg_enable_write(1);
     video_framebuffer_dma_enable_write(1);
     for (;;) ;
@@ -93,18 +94,20 @@ int main(void)
     if (!n64rt_restarted) n64rt_restart_snapshot();        /* (the .data a "Restart Game" puts back: n64rt_restart.c) */
     apf_bridge_slot_id_write(0);
     for (volatile int i = 0; i < 2000; i++) ;       /* (the slot's size: read in the bridge's clock) */
+    while ((monitor_id_read() & 0x80u) && !(monitor_id_read() & 0x100u)) ;  /* (external SRAM/memory ready: bit 8) */
     u32 size = apf_bridge_file_size_read();
+    if (size == 0) size = n64rt_ondemand_probe();   /* (Phase-5 on_demand File ID 0: query size & populate resident window) */
     printf("\nMirlo's N64 loader: a file of %lu bytes in slot 0\n", (unsigned long)size);
     if (n64rt_restarted) n64rt_restart_booted();
-    /* a small file that is no ROM: a program linked to run where it is (a
-     * test of the core's: lang/mips/test, its memory from 1 MiB) -- copied
-     * there, to the SDRAM, from the PSRAM the Pocket wrote it to */
-    while ((monitor_id_read() & 0x180u) != 0x180u) ;          /* (the PSRAM set up: the window answers) */
+    /* a small file that is no ROM: a program linked to run at 0x40100000 (lang/mips/test) */
     if (size >= 64u && size < 0x100000u && ROM[0] != 0x80371240u) {
         printf("loader: a program of %lu bytes at 1 MiB\n", (unsigned long)size);
         apf_bridge_savestate_write(0);
         volatile u32 *to = (volatile u32 *)(uintptr_t)(0x40000000u + N64RT_ROM_FILE_OFF);
-        for (u32 i = 0; i < (size + 3u) / 4u; i++) to[i] = ROM[i];
+        flush_cpu_dcache();
+        if (to[0] != ROM[0]) {
+            for (u32 i = 0; i < (size + 3u) / 4u; i++) to[i] = ROM[i];
+        }
         flush_cpu_dcache(); flush_cpu_icache();
         ((void (*)(void))(uintptr_t)(0x40000000u + N64RT_ROM_FILE_OFF))();
     }

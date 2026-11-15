@@ -586,7 +586,7 @@ static int pad_there(int i)
 {
     if (n64rt_snac_present(i)) return 1;                   /* (a real controller on the SNAC port) */
     if (i == 0) return 1;
-    if (n64rt_pak_kind(i) != N64RT_PAK_NONE) return 1;     /* (controller 2's "Transfer Pak (SD)": a pad that is there, nothing pressed if the dock has none) */
+    if (n64rt_pak_kind(i) == N64RT_PAK_VIRTUAL) return 1;  /* (controller 2's "Transfer Pak (SD)": a pad that is there, nothing pressed if the dock has none) */
     u32 k = i == 1 ? apf_input_cont2_key_read() : i == 2 ? apf_input_cont3_key_read() : apf_input_cont4_key_read();
     return KEY_TYPE(k) != 0u;
 }
@@ -1021,10 +1021,33 @@ s32 n64rt_osEepromLongWrite(OSMesgQueue *mq, u8 a, u8 *b, int n)
 }
 s32 n64rt_osEepromRead(OSMesgQueue *mq, u8 a, u8 *b) { return n64rt_osEepromLongRead(mq, a, b, 8); }
 s32 n64rt_osEepromWrite(OSMesgQueue *mq, u8 a, u8 *b) { return n64rt_osEepromLongWrite(mq, a, b, 8); }
-/* the Rumble Pak: none (the Pocket and its dock give a core nothing to vibrate; osMotorInit fails, so the game never starts it) */
-s32 n64rt_osMotorInit(OSMesgQueue *mq, void *pfs, int ch) { (void)mq; (void)pfs; (void)ch; return PFS_ERR_NOPACK; }
-s32 n64rt_osMotorStart(void *pfs) { (void)pfs; return PFS_ERR_NOPACK; }
-s32 n64rt_osMotorStop(void *pfs) { (void)pfs; return PFS_ERR_NOPACK; }
+/* the Rumble Pak (for non-OWN builds; OWN=1 runs the game's own osMotor* over PIF Joybus -> n64rt_pak.c) */
+s32 n64rt_osMotorInit(OSMesgQueue *mq, void *pfs, int ch)
+{
+    (void)mq;
+    if (n64rt_pak_kind(ch) != N64RT_PAK_RUMBLE) return PFS_ERR_NOPACK;
+    if (pfs) ((int *)pfs)[2] = ch;
+    u8 b[32];
+    memset(b, 0x80, 32);
+    (void)n64rt_pak_rw(ch, 0x8000u, b, 1);
+    return 0;
+}
+s32 n64rt_osMotorStart(void *pfs)
+{
+    int ch = pfs ? ((const int *)pfs)[2] : 0;
+    if (n64rt_pak_kind(ch) != N64RT_PAK_RUMBLE) return PFS_ERR_NOPACK;
+    u8 b[32];
+    memset(b, 0x01, 32);
+    return n64rt_pak_rw(ch, 0xC000u, b, 1);
+}
+s32 n64rt_osMotorStop(void *pfs)
+{
+    int ch = pfs ? ((const int *)pfs)[2] : 0;
+    if (n64rt_pak_kind(ch) != N64RT_PAK_RUMBLE) return PFS_ERR_NOPACK;
+    u8 b[32];
+    memset(b, 0x00, 32);
+    return n64rt_pak_rw(ch, 0xC000u, b, 1);
+}
 #endif
 void n64rt_osViRepeatLine(u8 on) { (void)on; }
 
@@ -1706,7 +1729,7 @@ static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
     u32 src = 0, dst = 0, ps = 0, ps_dst = 0;
     if (size == 0u || (pa & 3u) || pa + size > 0x800000u || (size >> 2) >= (1u << 21) - 1u) goto soft;
     if (cpa >= 0x08000000u && cpa < 0x10000000u) {                   /* domain 2: the save */
-        if (!s_pi2_hw) goto soft;
+        if (!s_pi2_hw || !s_rom64_hw) goto soft;
         if (s_d2 == D2_NONE) d2_use(D2_SRAM);
         const u32 a = d2_engine_addr(rd, (cpa - 0x08000000u) & (D2_WINDOW - 1u), size);
         if (!a) goto soft;
@@ -1716,11 +1739,9 @@ static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
     } else if (!rd && cpa >= 0x10000000u && cpa < 0x1FC00000u) {    /* the ROM */
         u32 off = cpa - 0x10000000u;
         if (size > n64rt_game->rom_size || off > n64rt_game->rom_size - size) goto soft;
-        /* ROM offsets below 30 MiB are in PSRAM; offsets thereafter are in SDRAM.
-         * A DMA crossing the split uses the runtime's copy path. */
-        if (!s_rom64_hw || n64rt_game->rom_sdram != 0x40100000u) goto soft;
-        if (off + size <= N64RT_ROM_SPLIT) { ps = 1u; src = 0x40200000u + off; }
-        else if (off >= N64RT_ROM_SPLIT) src = 0x40000000u + off - 0x01D00000u;
+        /* Game Bub: resident ROM lives directly in SDRAM at 0x40100000 (up to 52 MiB, or 51 MiB when >52 MiB tail is paged). */
+        if (!s_pi2_hw || n64rt_game->rom_sdram != 0x40100000u) goto soft;
+        if (off + size <= n64rt_rom_resident_limit()) { ps = 0u; src = 0x40100000u + off; }
         else goto soft;
     } else goto soft;
     if (rd) src = rdram; else dst = rdram;

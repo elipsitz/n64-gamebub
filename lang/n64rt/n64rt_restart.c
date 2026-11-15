@@ -51,15 +51,15 @@ void n64rt_rcp_events(void);                                /* n64rt_io.c */
 u32 n64rt_restarted;                    /* .bss: 0 when the program started on its own, the count of restarts when this run is one's */
 
 /* ---- the program's .data as it started -------------------------------------------------------------------------
- * SDRAM that nothing else uses (above the save states' scratch, below the second Transfer Pak's ROM; layout.h): a header and the words. */
-#define RS_AREA     (LAYOUT_STATE + 0x00AD0000u)
+ * Stored in free SRAM (LAYOUT_RESTART = 0x34162000, 8 KiB) so the entire 52 MiB SDRAM ROM window remains untouched. */
+#define RS_AREA     ((u32)LAYOUT_RESTART)
 #define RS_MAGIC    0x52535452u         /* "RSTR" */
 #define RS_DATA     0x100u
 #define RS_DATA_MAX 0x1F00u
 typedef struct { u32 magic, bytes, sum, count; } rs_head_t;
-_Static_assert(RS_AREA >= LAYOUT_STATE + 0x00AC0000u + 0x1000u && RS_AREA + 0x2000u <= LAYOUT_GBROM2, "the restart's copy lies between the save states' scratch and the second ROM");
-static rs_head_t *rs_head(void) { return (rs_head_t *)(uintptr_t)RS_AREA; }
-static u32 data_sum(const u32 *p, u32 bytes)
+_Static_assert(RS_AREA >= LAYOUT_SAVE_AUX + 0x1000u && RS_AREA + 0x2000u <= 0x34180000u, "the restart's copy fits in free SRAM");
+static volatile rs_head_t *rs_head(void) { return (volatile rs_head_t *)(uintptr_t)RS_AREA; }
+static u32 data_sum(const volatile u32 *p, u32 bytes)
 {
     u32 s = 0x52535452u;
     for (u32 i = 0; i < bytes / 4u; i++) s = (s << 5 | s >> 27) ^ p[i];
@@ -69,21 +69,22 @@ static u32 data_sum(const u32 *p, u32 bytes)
 void n64rt_restart_snapshot(void)
 {
     const u32 bytes = (u32)(_edata - _fdata);
-    rs_head_t *h = rs_head();
+    volatile rs_head_t *h = rs_head();
     h->magic = 0;
     if (bytes > RS_DATA_MAX) return;                    /* (a restart is then refused) */
-    memcpy((void *)(uintptr_t)(RS_AREA + RS_DATA), _fdata, bytes);
+    const u32 *src = (const u32 *)_fdata;
+    volatile u32 *dst = (volatile u32 *)(uintptr_t)(RS_AREA + RS_DATA);
+    for (u32 i = 0; i < bytes / 4u; i++) dst[i] = src[i];
     h->bytes = bytes; h->count = 0;
-    h->sum = data_sum((const u32 *)(uintptr_t)(RS_AREA + RS_DATA), bytes);
+    h->sum = data_sum(dst, bytes);
     h->magic = RS_MAGIC;
-    flush_cpu_dcache();
 }
 static int snapshot_ok(void)
 {
-    flush_cpu_dcache();
-    const rs_head_t *h = rs_head();
-    return h->magic == RS_MAGIC && h->bytes == (u32)(_edata - _fdata) &&
-           h->sum == data_sum((const u32 *)(uintptr_t)(RS_AREA + RS_DATA), h->bytes);
+    const volatile rs_head_t *h = rs_head();
+    const u32 bytes = h->bytes;
+    return h->magic == RS_MAGIC && bytes == (u32)(_edata - _fdata) &&
+           h->sum == data_sum((const volatile u32 *)(uintptr_t)(RS_AREA + RS_DATA), bytes);
 }
 
 /* ---- the state a restart keeps ------------------------------------------------------------------------------- */
@@ -191,8 +192,9 @@ static void hw_reset(void)
     /* the monitor's own: domain 2 is no FlashRAM, the VI's threshold open, the game's pads as the boot finds the settings */
     monitor_pi2_write(0);
     monitor_vithr_write(0x1FFFFu);
-    /* the Game Boy cartridge port (the Pocket's slot): off */
+    /* the Game Boy cartridge port (the Pocket's slot) and Rumble Pak motor: off */
     if (gb_cart_id_read() == 0x47420001u) gb_cart_ctrl_write(0);
+    apf_interact_interact2_write(apf_interact_interact2_read() & ~0x40000000u);
     /* what the changes above raised (not bit 5: the Pocket's request for a save state is its own, and waits) */
     for (volatile int i = 0; i < 64; i++) { }
     monitor_pend_write(0x1Fu);
@@ -242,9 +244,14 @@ void n64rt_restart_boot(void)
         memcpy((u8 *)keep + off, p, n);
         off += (n + 3u) & ~3u;
     }
-    const rs_head_t *h = rs_head();
+    const volatile rs_head_t *h = rs_head();
+    const u32 bytes = h->bytes;
     const u32 count = h->count + 1u;
-    memcpy(_fdata, (const void *)(uintptr_t)(RS_AREA + RS_DATA), h->bytes);
+    {
+        u32 *dst = (u32 *)_fdata;
+        const volatile u32 *src = (const volatile u32 *)(uintptr_t)(RS_AREA + RS_DATA);
+        for (u32 i = 0; i < bytes / 4u; i++) dst[i] = src[i];
+    }
     memset(_fbss, 0, (u32)(_ebss - _fbss));
     off = 0;
     for (u32 k = 0; k < NKEEP; k++) {
@@ -289,6 +296,8 @@ static void restart(void)
     RSLOG("n64rt: restart: the game restarts (%lu before); RSP %04lx, RDP list %06lx / %06lx, AI %08lx\n", (unsigned long)n64rt_restarted,
           (unsigned long)SP_STATUS, (unsigned long)RSP(0x48), (unsigned long)DPC_END, (unsigned long)hw_rd(AI_STATUS));
     /* the RSP stops where it is, the RDP finishes the list it has (while the Pocket writes the saves back, below) */
+    /* stop vibration motor immediately while draining AI / quiescing RCP */
+    apf_interact_interact2_write(apf_interact_interact2_read() & ~0x40000000u);
     SP_STATUS = 0x2u;
     DPC_STATUS = 0x4u;                                  /* (not frozen: a frozen list would never end) */
     n64rt_gbv_restart_prep();

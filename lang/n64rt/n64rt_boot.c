@@ -5,6 +5,7 @@
 #include <string.h>
 #include <system.h>
 #include <generated/csr.h>
+#include <generated/soc.h>
 #include <layout.h>
 #include <notice.h>
 #include "n64rt.h"
@@ -610,6 +611,84 @@ static void late_apply(int all)
  * through the core's window, N64RT_ROM_WIN. Nothing is moved. The port links its boot stack below
  * N64RT_ROM_FILE_OFF (--defsym=_fstack=0x400FFFF0). */
 #define FILE_SDRAM 0x40000000u
+#define OD_CACHE_BASE   0x43400000u
+#define OD_PAGE_SHIFT   16u
+#define OD_PAGE_BYTES   (1u << OD_PAGE_SHIFT)
+#define OD_CACHE_SLOTS  16u
+#define OD_RES_PAGED    0x03300000u     /* 51 MiB resident + 1 MiB demand-paged cache when ROM > 52 MiB */
+
+static u32 s_rom_res_limit = LAYOUT_ROM_RESIDENT_MAX;
+static u32 s_od_tags[OD_CACHE_SLOTS];
+static u32 s_od_hand;
+
+u32 n64rt_rom_resident_limit(void) { return s_rom_res_limit; }
+
+static u64 boot_now(void) { timer0_uptime_latch_write(1); return timer0_uptime_cycles_read(); }
+static int od_cmd(void (*issue)(u32), u32 timeout_ms)
+{
+    (void)apf_bridge_status_read();
+    issue(1u);
+    const u64 lim = boot_now() + (u64)(CONFIG_CLOCK_FREQUENCY / 1000u) * timeout_ms;
+    while (!apf_bridge_status_read()) {
+        if (boot_now() > lim) return -1;
+    }
+    return (int)(apf_bridge_command_result_code_read() & 7u);
+}
+
+static int od_read_chunk(u32 file_off, u32 sdram_dst, u32 len)
+{
+    apf_bridge_slot_id_write(0);
+    apf_bridge_data_offset_write(file_off);
+    apf_bridge_transfer_length_write(len);
+    apf_bridge_ram_data_address_write(sdram_dst);
+    for (volatile int i = 0; i < 64; i++) ;
+    int r = od_cmd(apf_bridge_request_read_write, 5000u);
+    if (r == 0) flush_cpu_dcache_range((const void *)(uintptr_t)sdram_dst, len);
+    return r;
+}
+
+/* Phase-5 on-demand probe for File ID 0 when host did not pre-load ROM during setup */
+u32 n64rt_ondemand_probe(void)
+{
+    apf_bridge_slot_id_write(0);
+    for (volatile int i = 0; i < 64; i++) ;
+    if (od_cmd(apf_bridge_request_getfile_write, 500u) != 0) return 0;
+    u32 sz = apf_bridge_file_size_read();
+    if (sz == 0) return 0;
+    if (sz > 0x04000000u) sz = 0x04000000u;
+
+    for (u32 i = 0; i < OD_CACHE_SLOTS; i++) s_od_tags[i] = ~0u;
+    s_od_hand = 0;
+    s_rom_res_limit = (sz > LAYOUT_ROM_RESIDENT_MAX) ? OD_RES_PAGED : LAYOUT_ROM_RESIDENT_MAX;
+
+    u32 preload = (sz < s_rom_res_limit) ? sz : s_rom_res_limit;
+    for (u32 off = 0; off < preload; ) {
+        u32 chunk = preload - off;
+        if (chunk > 0x00400000u) chunk = 0x00400000u;
+        if (od_read_chunk(off, FILE_SDRAM + N64RT_ROM_FILE_OFF + off, chunk) != 0) break;
+        off += chunk;
+    }
+    flush_cpu_dcache();
+    flush_cpu_icache();
+    return sz;
+}
+
+static u32 od_tail_word(u32 rom_off)
+{
+    const u32 page = rom_off >> OD_PAGE_SHIFT;
+    for (u32 s = 0; s < OD_CACHE_SLOTS; s++) {
+        if (s_od_tags[s] == page) {
+            return *(const volatile u32 *)(uintptr_t)(OD_CACHE_BASE + s * OD_PAGE_BYTES + (rom_off & (OD_PAGE_BYTES - 4u)));
+        }
+    }
+    const u32 slot = s_od_hand & (OD_CACHE_SLOTS - 1u);
+    s_od_hand++;
+    const u32 dst = OD_CACHE_BASE + slot * OD_PAGE_BYTES;
+    if (od_read_chunk(page << OD_PAGE_SHIFT, dst, OD_PAGE_BYTES) == 0)
+        s_od_tags[slot] = page;
+    return *(const volatile u32 *)(uintptr_t)(dst + (rom_off & (OD_PAGE_BYTES - 4u)));
+}
+
 static void no_rom(const char *msg) __attribute__((noreturn));
 static void no_rom(const char *msg)
 {
@@ -618,11 +697,13 @@ static void no_rom(const char *msg)
     notice(N64RT_RDRAM_SDRAM, msg);         /* (on the screen too: nothing of the game's is in the RDRAM yet) */
     for (;;) ;
 }
-/* the word the Pocket loaded at an offset from the program's start: below 1 MiB the SDRAM's, from there the window's */
+/* the word at an offset from the program's start: below 1 MiB in SDRAM, resident ROM via N64RT_ROM_WIN, tail via page cache */
 static u32 file_word(u32 off)
 {
     if (off < N64RT_ROM_FILE_OFF) return *(const volatile u32 *)(uintptr_t)(FILE_SDRAM + off);
-    return *(const volatile u32 *)(uintptr_t)(N64RT_ROM_WIN + (off - N64RT_ROM_FILE_OFF));
+    const u32 rom_off = off - N64RT_ROM_FILE_OFF;
+    if (rom_off < s_rom_res_limit) return *(const volatile u32 *)(uintptr_t)(N64RT_ROM_WIN + rom_off);
+    return od_tail_word(rom_off);
 }
 u32 n64rt_rom_word(u32 off)
 {
@@ -655,10 +736,10 @@ static void boot_checks(void)
         if ((mctl & CPU_LEVELS) != CPU_LEVELS)
             no_rom("This program needs a newer Mirlo core, whose CPU does the 64-bit instructions: nothing was started. The saves are as they were.");
     }
-    /* (the ROM in the PSRAM and its window: MONITOR.ID bit 7, and the chips set up, bit 8) */
-    while ((monitor_id_read() & 0xFFFF0180u) != 0x4D4F0180u) {
-        if ((monitor_id_read() & 0xFFFF0080u) != 0x4D4F0080u) no_rom("This program needs a newer Mirlo core: nothing was started.");
-    }
+    /* Verify MONITOR.ID signature + PI2, and wait for external SRAM ready (bit 8) when ROM64/SRAM bit 7 is set */
+    if ((monitor_id_read() >> 16) != 0x4D4Fu || !(monitor_id_read() & 0x40u))
+        no_rom("This program needs a newer Mirlo core: nothing was started.");
+    while ((monitor_id_read() & 0x80u) && !(monitor_id_read() & 0x100u)) { }
 }
 /* the ROM is `size` bytes at `off` of what the Pocket loaded */
 static void rom_at(n64rt_game_t *g, u32 off, u32 size)
@@ -669,7 +750,7 @@ static void rom_at(n64rt_game_t *g, u32 off, u32 size)
     g->rom_sdram = FILE_SDRAM + off;
     g->rom_size = size;
 #ifdef N64RT_DEBUG
-    if (size > N64RT_ROM_SPLIT) {
+    if (N64RT_ROM_SPLIT > 0u && size > N64RT_ROM_SPLIT) {
         /* (what a simulation compares with the file: words either side of where the SDRAM's part starts and the last one,
          * and a copy across it) */
         const n64rt_game_t *was = n64rt_game;
