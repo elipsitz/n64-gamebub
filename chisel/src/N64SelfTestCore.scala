@@ -38,10 +38,12 @@ class N64SelfTestCore extends Module with Core {
       dataWidth = 16,
       bankWidth = 2,
       chips = SdramV0.numChips,
+      perBitDataTri = true,
     )
     val sram = new SramV0(
       addressWidth = 18,
       dataWidth = 16,
+      perBitDataTri = true,
     )
   })
 

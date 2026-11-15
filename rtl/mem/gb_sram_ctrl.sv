@@ -71,7 +71,8 @@ module gb_sram_ctrl (
     output logic [17:0] sram_address,
     input  wire  [15:0] sram_dataIn,
     output logic [15:0] sram_dataOut,
-    output logic        sram_dataDir
+    output logic        sram_dataDir,
+    output logic [15:0] sram_dataTri
 );
 
 // ---- phase alignment (0 on first clk2x half of each clk cycle, 1 on second)
@@ -305,39 +306,42 @@ always_comb begin
     endcase
 end
 
-// Non-reset dedicated output FFs for address and dataOut (clean IOB packing)
-logic [17:0] addr_q;
-logic [15:0] dout_q;
+// Non-reset dedicated output FFs for address (clean IOB packing)
+(* IOB = "TRUE" *) logic [17:0] addr_q;
 always_ff @(posedge clk2x) begin
     addr_q <= nxt_addr;
-    dout_q <= nxt_dout;
 end
 assign sram_address = addr_q;
-assign sram_dataOut = dout_q;
 
-// Dedicated output FFs (zero internal readback) for control signals + input capture
-// Initialized to safe inactive states matching synchronous reset for 7-Series OLOGICE2 INIT_OQ/SRVAL_OQ
-logic       ce_n_q   = 1'b1;
-logic       we_n_q   = 1'b1;
-logic       oe_n_q   = 1'b1;
+// Dedicated output FFs (zero internal readback) for dataOut, per-bit tristate (T), and control signals.
+// `dout_q` (OLOGICE2.OUTFF) and `tri_q_bit` (OLOGICE2.TFF) share `rst2x` for 7-Series OLOGICE2 co-packing.
+(* IOB = "TRUE" *)                      logic [15:0] dout_q    = 16'h0000;
+(* IOB = "TRUE", DONT_TOUCH = "TRUE" *) logic [15:0] tri_q_bit = 16'hFFFF;
+(* IOB = "TRUE" *)                      logic        ce_n_q    = 1'b1;
+(* IOB = "TRUE" *)                      logic        we_n_q    = 1'b1;
+(* IOB = "TRUE" *)                      logic        oe_n_q    = 1'b1;
+(* IOB = "TRUE" *)                      logic [1:0]  mask_n_q  = 2'b11;
 logic       dir_q    = 1'b0;
-logic [1:0] mask_n_q = 2'b11;
 
 always_ff @(posedge clk2x) begin
     if (rst2x) begin
-        ce_n_q   <= 1'b1;
-        we_n_q   <= 1'b1;
-        oe_n_q   <= 1'b1;
-        dir_q    <= 1'b0;
-        mask_n_q <= 2'b11;
-        rx_hi    <= 16'h0000;
-        rx_lo    <= 16'h0000;
+        dout_q    <= 16'h0000;
+        tri_q_bit <= 16'hFFFF;
+        ce_n_q    <= 1'b1;
+        we_n_q    <= 1'b1;
+        oe_n_q    <= 1'b1;
+        dir_q     <= 1'b0;
+        mask_n_q  <= 2'b11;
+        rx_hi     <= 16'h0000;
+        rx_lo     <= 16'h0000;
     end else begin
-        ce_n_q   <= nxt_ce_n;
-        we_n_q   <= nxt_we_n;
-        oe_n_q   <= nxt_oe_n;
-        dir_q    <= nxt_dir;
-        mask_n_q <= nxt_mask_n;
+        dout_q    <= nxt_dout;
+        tri_q_bit <= {16{~nxt_dir}};
+        ce_n_q    <= nxt_ce_n;
+        we_n_q    <= nxt_we_n;
+        oe_n_q    <= nxt_oe_n;
+        dir_q     <= nxt_dir;
+        mask_n_q  <= nxt_mask_n;
 
         // Sample half 0 after 16 ns (at transition from S_RD0 to S_RD1 on pads)
         if (st == S_RD1 && !phase_sel)
@@ -352,7 +356,9 @@ assign sram_ceN        = ce_n_q;
 assign sram_weN        = we_n_q;
 assign sram_oeN        = oe_n_q;
 assign sram_writeMaskN = mask_n_q;
+assign sram_dataOut    = dout_q;
 assign sram_dataDir    = dir_q;
+assign sram_dataTri    = tri_q_bit;
 
 endmodule
 `default_nettype wire

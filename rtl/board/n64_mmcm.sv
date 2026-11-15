@@ -12,7 +12,7 @@
 //   CLKOUT6 (/30) =  25.000 MHz : clk_vid       (N64 VI timing generator, exact 2:5 to clk_sys)
 module n64_mmcm #(
     parameter int   CLK_DISPLAY_DIVIDE = 25,
-    parameter real  SDRAM_CLK_PHASE    = -135.0
+    parameter real  SDRAM_CLK_PHASE    = -150.0
 ) (
     input  wire logic               clk_in_50mhz,
 

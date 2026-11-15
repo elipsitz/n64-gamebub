@@ -75,7 +75,7 @@ module cpu_port #(
 
 // ---------------------------------------------------------------- the stores' FIFO
 localparam int FA = 4;                      // 16 words
-logic [66:0]  wf [1 << FA];                 // {a device's, strobes, data, address[31:2]}
+(* ram_style = "distributed" *) logic [66:0] wf [1 << FA]; // {a device's, strobes, data, address[31:2]}
 logic [FA:0]  wp;                           // clk_c
 logic [FA:0]  rp, wp_s;                     // clk
 logic [FA:0]  rp_c;                         // clk_c

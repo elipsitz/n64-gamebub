@@ -89,8 +89,8 @@ module rdp_top (
     // rdp_pix's P5 (tl_ra): the primitive's when nothing draws (the loads').
     //   tl_attr: {fmt 3, size 2, pal 4, line 9, tmem 9, cs, ms, ct, mt, masks 4, shifts 4, maskt 4, shiftt 4}
     //   tl_size: {uls 12, ult 12, lrs 12, lrt 12}
-    (* ram_style = "block" *) reg [46:0] tl_attr [0:7];
-    (* ram_style = "block" *) reg [47:0] tl_size [0:7];
+    (* ram_style = "distributed" *) reg [46:0] tl_attr [0:7];
+    (* ram_style = "distributed" *) reg [47:0] tl_size [0:7];
     integer ti;
     initial for (ti = 0; ti < 8; ti = ti + 1) begin tl_attr[ti] = 47'd0; tl_size[ti] = 48'd0; end
 

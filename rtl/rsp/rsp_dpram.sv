@@ -52,8 +52,8 @@ module rsp_dpram (
             .READ_WIDTH_B   (18),
             .WRITE_WIDTH_A  (18),
             .WRITE_WIDTH_B  (18),
-            .WRITE_MODE_A   ("WRITE_FIRST"),
-            .WRITE_MODE_B   ("WRITE_FIRST")
+            .WRITE_MODE_A   ("READ_FIRST"),
+            .WRITE_MODE_B   ("READ_FIRST")
         ) ram_hi (
             .CLKARDCLK      (clk),
             .CLKBWRCLK      (clk),
@@ -88,8 +88,8 @@ module rsp_dpram (
             .READ_WIDTH_B   (18),
             .WRITE_WIDTH_A  (18),
             .WRITE_WIDTH_B  (18),
-            .WRITE_MODE_A   ("WRITE_FIRST"),
-            .WRITE_MODE_B   ("WRITE_FIRST")
+            .WRITE_MODE_A   ("READ_FIRST"),
+            .WRITE_MODE_B   ("READ_FIRST")
         ) ram_lo (
             .CLKARDCLK      (clk),
             .CLKBWRCLK      (clk),

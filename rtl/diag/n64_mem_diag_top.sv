@@ -170,6 +170,7 @@ module n64_mem_diag_top #(
     input  wire logic [15:0] sdram_dataIn,
     output logic      [15:0] sdram_dataOut,
     output logic             sdram_dataDir,
+    output logic      [15:0] sdram_dataTri,
 
     // SramV0
     output logic             sram_ceN,
@@ -179,7 +180,8 @@ module n64_mem_diag_top #(
     output logic      [17:0] sram_address,
     input  wire logic [15:0] sram_dataIn,
     output logic      [15:0] sram_dataOut,
-    output logic             sram_dataDir
+    output logic             sram_dataDir,
+    output logic      [15:0] sram_dataTri
 );
     // -------------------------------------------------------------------------
     // 1. Unified MMCM Clock Generation + Runtime Fine Phase Shift
@@ -191,7 +193,7 @@ module n64_mem_diag_top #(
 
     n64_mmcm #(
         .CLK_DISPLAY_DIVIDE (DISPLAY_DIVIDER),
-        .SDRAM_CLK_PHASE    (-135.0)
+        .SDRAM_CLK_PHASE    (-150.0)
     ) u_mmcm (
         .clk_in_50mhz  (clocks_clockIn50M),
         .clk_sys       (clk_sys),
@@ -422,6 +424,7 @@ module n64_mem_diag_top #(
         .sdram_dq_in  (sdram_dataIn),
         .sdram_dq_out (sdram_dataOut),
         .sdram_dq_oe  (sdram_dataDir),
+        .sdram_dq_tri (sdram_dataTri),
         .sdram_clock  (sdram_clock)
     );
 
@@ -467,7 +470,8 @@ module n64_mem_diag_top #(
         .sram_address    (sram_address),
         .sram_dataIn     (sram_dataIn),
         .sram_dataOut    (sram_dataOut),
-        .sram_dataDir    (sram_dataDir)
+        .sram_dataDir    (sram_dataDir),
+        .sram_dataTri    (sram_dataTri)
     );
 
     logic        rom_req, rom_ack, rom_inv;
