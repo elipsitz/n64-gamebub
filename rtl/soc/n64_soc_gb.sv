@@ -86,10 +86,11 @@ module n64_soc_gb #(
     output wire logic [31:0] apf_interact_q,
     output wire logic        rumble_motor_on,
 
-    // Video filter controls (from gb_host_bridge)
+    // Video filter & HUD controls (from gb_host_bridge)
     input  wire logic        vid_horiz_blend_en,
     input  wire logic        vid_dither_en,
     input  wire logic        vid_no_weave,
+    input  wire logic [1:0]  vid_fps_mode,
 
     // Game Bub VideoV0 (320x240 RGB666 @ clk_sys)
     output wire logic [5:0]  video_data_r,
@@ -112,6 +113,7 @@ module n64_soc_gb #(
     input  wire logic [15:0] sdram_dq_in,
     output wire logic [15:0] sdram_dq_out,
     output wire logic        sdram_dq_oe,
+    output wire logic [15:0] sdram_dq_tri,
 
     // Game Bub SramV0 (IS61WV25616EDBLL-10TLI = 512 KiB, 10 ns)
     output wire logic        sram_ceN,
@@ -122,6 +124,7 @@ module n64_soc_gb #(
     input  wire logic [15:0] sram_dataIn,
     output wire logic [15:0] sram_dataOut,
     output wire logic        sram_dataDir,
+    output wire logic [15:0] sram_dataTri,
 
     // Optional debug / simulation tap outputs
     output wire logic        uart_tx_we,
@@ -263,6 +266,7 @@ module n64_soc_gb #(
         .sdram_dq_in  (sdram_dq_in),
         .sdram_dq_out (sdram_dq_out),
         .sdram_dq_oe  (sdram_dq_oe),
+        .sdram_dq_tri (sdram_dq_tri),
         .sdram_clock  (sdram_clock)
     );
 
@@ -1045,7 +1049,8 @@ module n64_soc_gb #(
         .sram_address    (sram_address),
         .sram_dataIn     (sram_dataIn),
         .sram_dataOut    (sram_dataOut),
-        .sram_dataDir    (sram_dataDir)
+        .sram_dataDir    (sram_dataDir),
+        .sram_dataTri    (sram_dataTri)
     );
 
     // -------------------------------------------------------------------------
@@ -1196,6 +1201,102 @@ module n64_soc_gb #(
     assign p_wdata[0] = 32'd0;
     assign p_be[0]    = 4'hF;
 
+    // Live N64 Frame Rate Measurement (1.000 s window = 62,500,000 clk_sys cycles,
+    // with early 0.25 s / 0.50 s bootstrap latch during first second of boot).
+    // Prioritizes VI_ORIGIN double/triple-buffer swaps; falls back to RDP SYNC_FULL
+    // single-buffered renders, then active VI scanout fields on static screens.
+    logic [25:0] fps_win_cyc;
+    logic        fps_boot_q1, fps_boot_q2;
+    logic [23:0] fps_prev_origin;
+    logic        fps_dp_pend;
+    logic [6:0]  fps_swap_cnt, fps_dp_cnt, fps_vi_cnt;
+    logic [3:0]  fps_tens, fps_ones;
+
+    wire  [6:0]  fps_raw_sel = (fps_swap_cnt != 7'd0) ? fps_swap_cnt
+                             : (fps_dp_cnt   != 7'd0) ? fps_dp_cnt
+                             :                          fps_vi_cnt;
+    wire         fps_at_250ms = !fps_boot_q1 && (fps_win_cyc == 26'd15_624_999);
+    wire         fps_at_500ms = !fps_boot_q2 && (fps_win_cyc == 26'd31_249_999);
+    wire         fps_at_1000ms = (fps_win_cyc == 26'd62_499_999);
+    wire  [8:0]  fps_scaled   = fps_at_250ms ? {fps_raw_sel, 2'b00}
+                              : fps_at_500ms ? {1'b0, fps_raw_sel, 1'b0}
+                              :                {2'b00, fps_raw_sel};
+    wire  [6:0]  fps_clamped  = (fps_scaled > 9'd99) ? 7'd99 : fps_scaled[6:0];
+
+    function automatic logic [7:0] to_bcd2(input logic [6:0] v);
+        logic [3:0] tens;
+        logic [6:0] rem;
+        begin
+            if      (v >= 7'd90) begin tens = 4'd9; rem = v - 7'd90; end
+            else if (v >= 7'd80) begin tens = 4'd8; rem = v - 7'd80; end
+            else if (v >= 7'd70) begin tens = 4'd7; rem = v - 7'd70; end
+            else if (v >= 7'd60) begin tens = 4'd6; rem = v - 7'd60; end
+            else if (v >= 7'd50) begin tens = 4'd5; rem = v - 7'd50; end
+            else if (v >= 7'd40) begin tens = 4'd4; rem = v - 7'd40; end
+            else if (v >= 7'd30) begin tens = 4'd3; rem = v - 7'd30; end
+            else if (v >= 7'd20) begin tens = 4'd2; rem = v - 7'd20; end
+            else if (v >= 7'd10) begin tens = 4'd1; rem = v - 7'd10; end
+            else                 begin tens = 4'd0; rem = v;         end
+            return {tens, rem[3:0]};
+        end
+    endfunction
+
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            fps_win_cyc     <= 26'd0;
+            fps_boot_q1     <= 1'b0;
+            fps_boot_q2     <= 1'b0;
+            fps_prev_origin <= 24'd0;
+            fps_dp_pend     <= 1'b0;
+            fps_swap_cnt    <= 7'd0;
+            fps_dp_cnt      <= 7'd0;
+            fps_vi_cnt      <= 7'd0;
+            fps_tens        <= 4'd0;
+            fps_ones        <= 4'd0;
+        end else begin
+            if (mon_dp)
+                fps_dp_pend <= 1'b1;
+
+            if (fps_at_250ms || fps_at_500ms) begin
+                {fps_tens, fps_ones} <= to_bcd2(fps_clamped);
+                if (fps_at_250ms) fps_boot_q1 <= 1'b1;
+                if (fps_at_500ms) fps_boot_q2 <= 1'b1;
+            end
+
+            if (fps_at_1000ms) begin
+                {fps_tens, fps_ones} <= to_bcd2(fps_clamped);
+                fps_win_cyc  <= 26'd0;
+                fps_swap_cnt <= 7'd0;
+                fps_dp_cnt   <= 7'd0;
+                fps_vi_cnt   <= 7'd0;
+                if (vi_latch && fb_en) begin
+                    fps_vi_cnt      <= 7'd1;
+                    fps_prev_origin <= fb_base[23:0];
+                    if (fb_base[23:0] != fps_prev_origin)
+                        fps_swap_cnt <= 7'd1;
+                    if (fps_dp_pend || mon_dp) begin
+                        fps_dp_cnt  <= 7'd1;
+                        fps_dp_pend <= 1'b0;
+                    end
+                end
+            end else begin
+                fps_win_cyc <= fps_win_cyc + 26'd1;
+                if (vi_latch && fb_en) begin
+                    if (fps_vi_cnt != 7'd127)
+                        fps_vi_cnt <= fps_vi_cnt + 7'd1;
+                    fps_prev_origin <= fb_base[23:0];
+                    if ((fb_base[23:0] != fps_prev_origin) && (fps_swap_cnt != 7'd127))
+                        fps_swap_cnt <= fps_swap_cnt + 7'd1;
+                    if (fps_dp_pend || mon_dp) begin
+                        if (fps_dp_cnt != 7'd127)
+                            fps_dp_cnt <= fps_dp_cnt + 7'd1;
+                        fps_dp_pend <= 1'b0;
+                    end
+                end
+            end
+        end
+    end
+
     n64_video_gb_downsampler u_downsampler (
         .clk_vid          (clk_vid),
         .rst_vid          (rst_vid),
@@ -1211,6 +1312,9 @@ module n64_soc_gb #(
         .rst_sys          (rst),
         .horiz_blend_en   (vid_horiz_blend_en),
         .dither_en        (vid_dither_en),
+        .fps_mode         (vid_fps_mode),
+        .fps_tens         (fps_tens),
+        .fps_ones         (fps_ones),
         .video_data_r     (video_data_r),
         .video_data_g     (video_data_g),
         .video_data_b     (video_data_b),

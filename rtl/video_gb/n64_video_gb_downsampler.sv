@@ -38,6 +38,9 @@ module n64_video_gb_downsampler (
     input  wire        rst_sys,
     input  wire        horiz_blend_en,
     input  wire        dither_en,
+    input  wire [1:0]  fps_mode,
+    input  wire [3:0]  fps_tens,
+    input  wire [3:0]  fps_ones,
 
     output logic [5:0] video_data_r,
     output logic [5:0] video_data_g,
@@ -244,6 +247,113 @@ module n64_video_gb_downsampler (
     wire [1:0]  dout_tag  = fifo_dout[19:18];
     wire [17:0] dout_rgb  = fifo_dout[17:0];
 
+    // -------------------------------------------------------------------------
+    // Top-Corner Translucent FPS Badge Overlay (36x11 rounded capsule, 0 BRAM)
+    //   fps_mode == 2'd1 : Top-Right (x = 280..315, y = 4..14)
+    //   fps_mode == 2'd2 : Top-Left  (x =   4.. 39, y = 4..14)
+    // -------------------------------------------------------------------------
+    function automatic logic [6:0] fps_glyph_col(input logic [3:0] ch, input logic [2:0] col);
+        logic [34:0] bits;
+        begin
+            unique case (ch)
+                4'd0:    bits = {7'h3e, 7'h51, 7'h49, 7'h45, 7'h3e}; // '0'
+                4'd1:    bits = {7'h00, 7'h42, 7'h7f, 7'h40, 7'h00}; // '1'
+                4'd2:    bits = {7'h42, 7'h61, 7'h51, 7'h49, 7'h46}; // '2'
+                4'd3:    bits = {7'h22, 7'h41, 7'h49, 7'h49, 7'h36}; // '3'
+                4'd4:    bits = {7'h18, 7'h14, 7'h12, 7'h7f, 7'h10}; // '4'
+                4'd5:    bits = {7'h27, 7'h45, 7'h45, 7'h45, 7'h39}; // '5'
+                4'd6:    bits = {7'h3c, 7'h4a, 7'h49, 7'h49, 7'h30}; // '6'
+                4'd7:    bits = {7'h01, 7'h71, 7'h09, 7'h05, 7'h03}; // '7'
+                4'd8:    bits = {7'h36, 7'h49, 7'h49, 7'h49, 7'h36}; // '8'
+                4'd9:    bits = {7'h06, 7'h49, 7'h49, 7'h29, 7'h1e}; // '9'
+                4'd10:   bits = {7'h7f, 7'h09, 7'h09, 7'h09, 7'h01}; // 'F'
+                4'd11:   bits = {7'h7f, 7'h09, 7'h09, 7'h09, 7'h06}; // 'P'
+                4'd12:   bits = {7'h46, 7'h49, 7'h49, 7'h49, 7'h31}; // 'S'
+                default: bits = 35'd0;
+            endcase
+            unique case (col)
+                3'd0:    return bits[34:28];
+                3'd1:    return bits[27:21];
+                3'd2:    return bits[20:14];
+                3'd3:    return bits[13:7];
+                3'd4:    return bits[6:0];
+                default: return 7'd0;
+            endcase
+        end
+    endfunction
+
+    logic [17:0] out_rgb_mux;
+    logic [8:0]  fps_x0;
+    logic [5:0]  fps_bx;
+    logic [3:0]  fps_by;
+    logic        fps_corner;
+    logic [5:0]  fps_bg_r, fps_bg_g, fps_bg_b;
+    logic        fps_fg_on, fps_is_num;
+    logic [3:0]  fps_ch;
+    logic [2:0]  fps_gx;
+    logic [6:0]  fps_col_bits;
+
+    always_comb begin
+        out_rgb_mux  = dout_rgb;
+        fps_x0       = (fps_mode == 2'd1) ? 9'd280 : 9'd4;
+        fps_bx       = 6'd0;
+        fps_by       = 4'd0;
+        fps_corner   = 1'b0;
+        fps_bg_r     = {2'b00, dout_rgb[17:14]};
+        fps_bg_g     = {2'b00, dout_rgb[11:8]};
+        fps_bg_b     = {2'b00, dout_rgb[5:2]};
+        fps_fg_on    = 1'b0;
+        fps_is_num   = 1'b0;
+        fps_ch       = 4'd15;
+        fps_gx       = 3'd0;
+        fps_col_bits = 7'd0;
+
+        if ((fps_mode == 2'd1 || fps_mode == 2'd2) && (sys_y >= 8'd4 && sys_y <= 8'd14)) begin
+            if (sys_x >= fps_x0 && sys_x < (fps_x0 + 9'd36)) begin
+                fps_bx     = 6'(sys_x - fps_x0);
+                fps_by     = 4'(sys_y - 8'd4);
+                fps_corner = (fps_bx == 6'd0 || fps_bx == 6'd35) && (fps_by == 4'd0 || fps_by == 4'd10);
+                if (!fps_corner) begin
+                    if (fps_by >= 4'd2 && fps_by <= 4'd8) begin
+                        if (fps_bx >= 6'd3 && fps_bx <= 6'd7) begin
+                            fps_ch     = (fps_tens == 4'd0) ? 4'd15 : fps_tens;
+                            fps_gx     = 3'(fps_bx - 6'd3);
+                            fps_is_num = 1'b1;
+                        end else if (fps_bx >= 6'd9 && fps_bx <= 6'd13) begin
+                            fps_ch     = fps_ones;
+                            fps_gx     = 3'(fps_bx - 6'd9);
+                            fps_is_num = 1'b1;
+                        end else if (fps_bx >= 6'd17 && fps_bx <= 6'd21) begin
+                            fps_ch     = 4'd10;
+                            fps_gx     = 3'(fps_bx - 6'd17);
+                        end else if (fps_bx >= 6'd23 && fps_bx <= 6'd27) begin
+                            fps_ch     = 4'd11;
+                            fps_gx     = 3'(fps_bx - 6'd23);
+                        end else if (fps_bx >= 6'd29 && fps_bx <= 6'd33) begin
+                            fps_ch     = 4'd12;
+                            fps_gx     = 3'(fps_bx - 6'd29);
+                        end
+                        if (fps_ch != 4'd15) begin
+                            fps_col_bits = fps_glyph_col(fps_ch, fps_gx);
+                            fps_fg_on    = fps_col_bits[fps_by - 4'd2];
+                        end
+                    end
+                    if (fps_fg_on) begin
+                        if (fps_is_num)
+                            out_rgb_mux = (fps_tens >= 4'd2) ? {6'd16, 6'd62, 6'd24}
+                                                             : {6'd63, 6'd48, 6'd8};
+                        else
+                            out_rgb_mux = {6'd48, 6'd52, 6'd56};
+                    end else if (fps_bx == 6'd0 || fps_bx == 6'd35 || fps_by == 4'd0 || fps_by == 4'd10) begin
+                        out_rgb_mux = {fps_bg_r | 6'd6, fps_bg_g | 6'd8, fps_bg_b | 6'd10};
+                    end else begin
+                        out_rgb_mux = {fps_bg_r, fps_bg_g, fps_bg_b};
+                    end
+                end
+            end
+        end
+    end
+
     logic       fifo_pop;
     always_comb begin
         fifo_pop = 1'b0;
@@ -331,7 +441,7 @@ module n64_video_gb_downsampler (
                             sys_y        <= 8'd0;
                             st           <= S_VBLANK;
                         end else begin
-                            {video_data_r, video_data_g, video_data_b} <= dout_rgb;
+                            {video_data_r, video_data_g, video_data_b} <= out_rgb_mux;
                             video_dataEnable <= 1'b1;
                             sys_x            <= sys_x + 9'd1;
                             if ((dout_tag == TAG_EOL) || (sys_x == 9'd319))

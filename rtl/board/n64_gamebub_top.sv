@@ -176,6 +176,7 @@ module n64_gamebub_top #(
     input  wire logic [15:0] sdram_dataIn,
     output wire logic [15:0] sdram_dataOut,
     output wire logic        sdram_dataDir,
+    output wire logic [15:0] sdram_dataTri,
 
     // SramV0 (IS61WV25616EDBLL-10TLI = 512 KiB, 10 ns)
     output wire logic        sram_ceN,
@@ -185,7 +186,8 @@ module n64_gamebub_top #(
     output wire logic [17:0] sram_address,
     input  wire logic [15:0] sram_dataIn,
     output wire logic [15:0] sram_dataOut,
-    output wire logic        sram_dataDir
+    output wire logic        sram_dataDir,
+    output wire logic [15:0] sram_dataTri
 );
     // -------------------------------------------------------------------------
     // 1. Unified MMCM Clock Generation (VCO = 750.000 MHz)
@@ -202,7 +204,7 @@ module n64_gamebub_top #(
 
     n64_mmcm #(
         .CLK_DISPLAY_DIVIDE (DISPLAY_DIVIDER),
-        .SDRAM_CLK_PHASE    (-135.0)
+        .SDRAM_CLK_PHASE    (-150.0)
     ) u_mmcm (
         .clk_in_50mhz  (clocks_clockIn50M),
         .clk_sys       (clk_sys),
@@ -283,6 +285,7 @@ module n64_gamebub_top #(
     wire        setup_done, core_running, core_focused;
     wire        rom_cache_inv;
     wire        vid_horiz_blend_en, vid_dither_en, vid_no_weave;
+    wire [1:0]  vid_fps_mode;
 
     // Simulation observable UART & CPU debug taps
     wire        uart_tx_we   /* verilator public_flat_rd */;
@@ -481,6 +484,7 @@ module n64_gamebub_top #(
         .vid_horiz_blend_en             (vid_horiz_blend_en),
         .vid_dither_en                  (vid_dither_en),
         .vid_no_weave                   (vid_no_weave),
+        .vid_fps_mode                   (vid_fps_mode),
         .sdram_ps_target                (sdram_ps_target)
     );
 
@@ -625,6 +629,7 @@ module n64_gamebub_top #(
         .vid_horiz_blend_en             (vid_horiz_blend_en),
         .vid_dither_en                  (vid_dither_en),
         .vid_no_weave                   (vid_no_weave),
+        .vid_fps_mode                   (vid_fps_mode),
 
         .video_data_r                   (video_data_r),
         .video_data_g                   (video_data_g),
@@ -645,6 +650,7 @@ module n64_gamebub_top #(
         .sdram_dq_in                    (sdram_dataIn),
         .sdram_dq_out                   (sdram_dataOut),
         .sdram_dq_oe                    (sdram_dataDir),
+        .sdram_dq_tri                   (sdram_dataTri),
 
         .sram_ceN                       (sram_ceN),
         .sram_weN                       (sram_weN),
@@ -654,6 +660,7 @@ module n64_gamebub_top #(
         .sram_dataIn                    (sram_dataIn),
         .sram_dataOut                   (sram_dataOut),
         .sram_dataDir                   (sram_dataDir),
+        .sram_dataTri                   (sram_dataTri),
 
         .uart_tx_we                     (uart_tx_we),
         .uart_tx_byte                   (uart_tx_byte),

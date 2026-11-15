@@ -329,6 +329,12 @@ static uint8_t     g_fb_latched[320 * 240 * 3];
 static bool        g_fb_has_frame     = false;
 static long        g_nonzero_audio    = 0;
 static long        g_vibrate_cycles   = 0;
+static int         g_wav_acc          = 0;
+static bool        g_wav_en           = false;
+static std::vector<int16_t> g_wav_pcm; // interleaved L, R @ 48,000 Hz
+static std::string g_dump_dir;
+static long        g_dump_every       = 0;
+static std::string g_od_loading_ppm;
 
 struct HostFile {
     bool                 present   = false;
@@ -433,6 +439,19 @@ static void service_command_core_if_pending() {
         host_mem_wr(0xF0001000u, 0u);
     } else if (op == 0x0402u) { // FileRead: dest=arg2, file_off=arg3, len=arg5
         g_cmd_core_read_cnt++;
+        if (!g_od_loading_ppm.empty() && g_cmd_core_read_cnt == 5) {
+            std::string out_path = g_od_loading_ppm;
+            g_od_loading_ppm.clear();
+            long target_f = g_vid_frames + 2;
+            long flim = g_sys + 3000000L;
+            while (g_sys < flim && g_vid_frames < target_f) step_sys_cycle();
+            FILE *lfp = fopen(out_path.c_str(), "wb");
+            if (lfp) {
+                fprintf(lfp, "P6\n320 240\n255\n");
+                fwrite(g_fb_latched, 1, sizeof(g_fb_latched), lfp);
+                fclose(lfp);
+            }
+        }
         uint32_t dest = arg2, foff = arg3, len = arg5;
         if (fid < 16 && g_files[fid].present && foff <= g_files[fid].data.size()) {
             const auto &buf = g_files[fid].data;
@@ -554,12 +573,30 @@ static void step_half_sys(bool sys_edge) {
             g_vid_frames++;
             memcpy(g_fb_latched, g_fb_cur, sizeof(g_fb_latched));
             g_fb_has_frame = true;
+            if (!g_dump_dir.empty() && g_dump_every > 0 && (g_vid_frames % g_dump_every) == 0) {
+                char pbuf[512];
+                snprintf(pbuf, sizeof(pbuf), "%s/frame_%04ld.ppm", g_dump_dir.c_str(), g_vid_frames);
+                FILE *fp = fopen(pbuf, "wb");
+                if (fp) {
+                    fprintf(fp, "P6\n320 240\n255\n");
+                    fwrite(g_fb_latched, 1, sizeof(g_fb_latched), fp);
+                    fclose(fp);
+                }
+            }
         }
         g_prev_vblank = vb;
         g_prev_hblank = hb;
 
         if (dut->audio_left != 0 || dut->audio_right != 0) g_nonzero_audio++;
         if (dut->vibrate_mode != 0) g_vibrate_cycles++;
+        if (g_wav_en) {
+            g_wav_acc += 12;
+            if (g_wav_acc >= 15625) {
+                g_wav_acc -= 15625;
+                g_wav_pcm.push_back((int16_t)dut->audio_left);
+                g_wav_pcm.push_back((int16_t)dut->audio_right);
+            }
+        }
 
         g_sys++;
     }
@@ -638,16 +675,29 @@ int main(int argc, char **argv) {
     int pak_setting = 1; // 1 = Controller Pak, 2 = Rumble Pak
     bool test_restart = false;
     std::string dump_ppm;
+    std::string dump_wav;
     long max_frames = 0;
+    long press_start_at = -1;
+    int fps_mode = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) mode = argv[++i];
         else if (strcmp(argv[i], "--file") == 0 && i + 1 < argc) arg_file = argv[++i];
+        else if (strcmp(argv[i], "--n64rt") == 0 && i + 1 < argc) n64rt_path = argv[++i];
+        else if (strcmp(argv[i], "--savedb") == 0 && i + 1 < argc) savedb_path = argv[++i];
         else if (strcmp(argv[i], "--pak") == 0 && i + 1 < argc) pak_setting = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--fps-mode") == 0 && i + 1 < argc) fps_mode = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--od-loading-ppm") == 0 && i + 1 < argc) g_od_loading_ppm = argv[++i];
         else if (strcmp(argv[i], "--test-restart") == 0) test_restart = true;
         else if (strcmp(argv[i], "--dump-ppm") == 0 && i + 1 < argc) dump_ppm = argv[++i];
+        else if (strcmp(argv[i], "--dump-dir") == 0 && i + 1 < argc) g_dump_dir = argv[++i];
+        else if (strcmp(argv[i], "--dump-every") == 0 && i + 1 < argc) g_dump_every = atol(argv[++i]);
+        else if (strcmp(argv[i], "--dump-wav") == 0 && i + 1 < argc) dump_wav = argv[++i];
         else if (strcmp(argv[i], "--max-frames") == 0 && i + 1 < argc) max_frames = atol(argv[++i]);
+        else if (strcmp(argv[i], "--press-start-at") == 0 && i + 1 < argc) press_start_at = atol(argv[++i]);
     }
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    g_wav_en = !dump_wav.empty();
 
     // Initialize inputs & hold reset for 24 sys cycles
     dut->reset                    = 1;
@@ -784,6 +834,7 @@ int main(int argc, char **argv) {
 
         // Configure Controller 1 Pak (`0x7000_0000`: 1 = Controller Pak, 2 = Rumble Pak)
         host_mem_wr(0x70000000u, (uint32_t)pak_setting);
+        if (fps_mode != 0) host_mem_wr(0x70000040u, (uint32_t)fps_mode);
         // Also exercise VI Deblur (`0x7000_0018`) & 32-bit Color (`0x7000_001C`) settings!
         host_mem_wr(0x70000018u, 1u);
         host_mem_wr(0x7000001Cu, 1u);
@@ -887,6 +938,78 @@ int main(int argc, char **argv) {
                    mode.c_str(), arg_file.c_str(), pak_setting, (int)test_restart,
                    sdr_peek_word(report_w0 + 2), g_sram.cnt_l2_reads, g_vid_frames,
                    g_nonzero_audio, g_vibrate_cycles, g_cmd_core_read_cnt, g_ac_errors);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // MODE E: Real Commercial N64 ROM Run (`--mode realrom | realrom_od`)
+    // ------------------------------------------------------------------------
+    else if (mode == "realrom" || mode == "realrom_od") {
+        bool is_ondemand = (mode == "realrom_od");
+        if (!load_bin(n64rt_path.c_str(), g_files[3].data)) return 1;
+        if (!load_bin(savedb_path.c_str(), g_files[4].data)) return 1;
+        if (!load_bin(arg_file.c_str(), g_files[0].data)) return 1;
+        g_files[0].present   = true;
+        g_files[0].on_demand = is_ondemand;
+        g_files[3].present   = true;
+        g_files[4].present   = true;
+
+        host_mem_wr(0x70000000u, (uint32_t)pak_setting);
+        if (fps_mode != 0) host_mem_wr(0x70000040u, (uint32_t)fps_mode);
+        std::vector<uint8_t> blank_sav(2048u, 0xFFu);
+        std::vector<uint8_t> blank_mpk(32768u, 0xFFu);
+        host_write_file_eager(1, 0x34140000u, blank_sav, false);
+        host_write_file_eager(2, 0x34108000u, blank_mpk, false);
+        host_write_file_eager(4, 0x34130000u, g_files[4].data, false);
+        host_write_file_eager(3, 0x00000000u, g_files[3].data, true);
+        if (!is_ondemand) {
+            host_write_file_eager(0, 0x00100000u, g_files[0].data, true);
+        }
+
+        dut->pad_axes_0 = 0x00000000u; // Centered stick!
+        dut->pad_btns_0 = 0u;
+        host_cmd(0x0102u); // SetupComplete
+        host_cmd(0x0100u); // CoreRun
+        host_cmd(0x0200u, 1u);
+
+        long target = (max_frames > 0) ? max_frames : 120L;
+        long last_rep = 0;
+        while (g_vid_frames < target) {
+            if (press_start_at >= 0) {
+                dut->pad_btns_0 = (g_vid_frames >= press_start_at && g_vid_frames < press_start_at + 6)
+                                ? (1u << 14) /* Start button bit in pad_btns_0 */ : 0u;
+            }
+            step_sys_cycle();
+            if (g_vid_frames != last_rep && (g_vid_frames % 10) == 0) {
+                last_rep = g_vid_frames;
+                printf("[REALROM f=%04ld] sys=%ld (%.3fs) pc=0x%08x l2=%ld r0_rw=%ld/%ld r1_rw=%ld/%ld aud_nz=%ld wav_smp=%zu ac_err=%ld\n",
+                       g_vid_frames, g_sys, (double)g_sys / 62.5e6, dut->tb_cpu_pc,
+                       g_sram.cnt_l2_reads,
+                       g_sdr[0].cnt_rd, g_sdr[0].cnt_wr,
+                       g_sdr[1].cnt_rd, g_sdr[1].cnt_wr,
+                       g_nonzero_audio, g_wav_pcm.size() / 2, g_ac_errors);
+                fflush(stdout);
+            }
+        }
+        printf("[REALROM DONE] frames=%ld sys=%ld ac_err=%ld\nUART:\n%s\n",
+               g_vid_frames, g_sys, g_ac_errors, g_uart_log.c_str());
+    }
+
+    if (!dump_wav.empty() && !g_wav_pcm.empty()) {
+        FILE *wf = fopen(dump_wav.c_str(), "wb");
+        if (wf) {
+            uint32_t data_bytes = (uint32_t)(g_wav_pcm.size() * sizeof(int16_t));
+            uint32_t riff_sz    = 36u + data_bytes;
+            uint32_t fmt_sz     = 16u;
+            uint16_t pcm_fmt    = 1u, nch = 2u, blk_align = 4u, bps = 16u;
+            uint32_t srate      = 48000u, brate = srate * 4u;
+            fwrite("RIFF", 1, 4, wf); fwrite(&riff_sz, 4, 1, wf); fwrite("WAVE", 1, 4, wf);
+            fwrite("fmt ", 1, 4, wf); fwrite(&fmt_sz, 4, 1, wf);  fwrite(&pcm_fmt, 2, 1, wf);
+            fwrite(&nch, 2, 1, wf);   fwrite(&srate, 4, 1, wf);   fwrite(&brate, 4, 1, wf);
+            fwrite(&blk_align, 2, 1, wf); fwrite(&bps, 2, 1, wf);
+            fwrite("data", 1, 4, wf); fwrite(&data_bytes, 4, 1, wf);
+            fwrite(g_wav_pcm.data(), 1, data_bytes, wf);
+            fclose(wf);
         }
     }
 

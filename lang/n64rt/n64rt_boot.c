@@ -647,6 +647,89 @@ static int od_read_chunk(u32 file_off, u32 sdram_dst, u32 len)
     return r;
 }
 
+/* Render live on-screen progress bar in N64RT_RDRAM_SDRAM while Phase-5 on_demand preloads File ID 0 */
+static void od_draw_str(volatile u32 *fb, u32 row_y, u32 word_x, const char *s, u32 fg, u32 bg)
+{
+    for (; *s; s++, word_x += 6u) {
+        u32 c = (u8)*s;
+        if (c >= 0x60u) c -= 0x20u;
+        if (c < 0x20u || c >= 0x60u) c = ' ';
+        for (u32 y = 0; y < 7u; y++) {
+            volatile u32 *r0 = fb + (row_y + 2u * y) * 160u + word_x;
+            volatile u32 *r1 = r0 + 160u;
+            for (u32 x = 0; x < 6u; x++) {
+                u32 on = (x < 5u) && ((notice_font[c - 0x20u][x] >> y) & 1u);
+                r0[x] = r1[x] = on ? fg : bg;
+            }
+        }
+    }
+}
+
+static u32 od_u32_to_dec(char *dst, u32 v)
+{
+    char tmp[12];
+    u32 n = 0, out = 0;
+    if (v == 0u) { dst[0] = '0'; return 1u; }
+    while (v > 0u) { tmp[n++] = (char)('0' + (v % 10u)); v /= 10u; }
+    while (n > 0u) dst[out++] = tmp[--n];
+    return out;
+}
+
+static void od_draw_progress(u32 done_bytes, u32 total_bytes, int first)
+{
+    const u32 BG     = 0x08650865u; /* dark slate-navy RGBA5551 */
+    const u32 BORDER = 0xCE7BCE7Bu; /* crisp light-gray frame */
+    const u32 TRACK  = 0x00430043u; /* recessed dark bar track */
+    const u32 BAR_HI = 0x6FF96FF9u; /* bright mint highlight */
+    const u32 BAR_LO = 0x27112711u; /* N64 emerald fill */
+    volatile u32 *fb = (volatile u32 *)(uintptr_t)N64RT_RDRAM_SDRAM;
+
+    if (first) {
+        for (u32 i = 0; i < 320u * 240u / 2u; i++) fb[i] = BG;
+        od_draw_str(fb, 66u, 47u, "NINTENDO 64", 0xFFFFFFFFu, BG);
+        od_draw_str(fb, 92u, 38u, "LOADING ROM...", 0xADF7ADF7u, BG);
+        for (u32 y = 120u; y < 136u; y++) {
+            for (u32 x = 29u; x <= 130u; x++) {
+                int edge = (y < 122u || y >= 134u || x == 29u || x == 130u);
+                fb[y * 160u + x] = edge ? BORDER : TRACK;
+            }
+        }
+    }
+
+    u32 filled = total_bytes ? (u32)(((u64)done_bytes * 98u) / total_bytes) : 0u;
+    if (filled > 98u) filled = 98u;
+    for (u32 y = 123u; y < 133u; y++) {
+        u32 fill_col = (y < 126u) ? BAR_HI : BAR_LO;
+        for (u32 i = 0; i < 98u; i++)
+            fb[y * 160u + 31u + i] = (i < filled) ? fill_col : TRACK;
+    }
+
+    char status[32];
+    u32 p = 0;
+    u32 done_mb  = (done_bytes + 0x80000u) >> 20;
+    u32 total_mb = (total_bytes + 0xFFFFFu) >> 20;
+    u32 pct      = total_bytes ? (u32)(((u64)done_bytes * 100u) / total_bytes) : 100u;
+    if (pct > 100u) pct = 100u;
+    p += od_u32_to_dec(status + p, done_mb);
+    status[p++] = '/';
+    p += od_u32_to_dec(status + p, total_mb);
+    status[p++] = ' '; status[p++] = 'M'; status[p++] = 'B'; status[p++] = ' '; status[p++] = '(';
+    p += od_u32_to_dec(status + p, pct);
+    status[p++] = '%'; status[p++] = ')';
+    while (p < 16u) status[p++] = ' ';
+    status[p] = '\0';
+    od_draw_str(fb, 150u, 36u, status, 0xFFFFFFFFu, BG);
+
+    flush_cpu_dcache_range((const void *)(uintptr_t)N64RT_RDRAM_SDRAM, 320u * 240u * 2u);
+    if (first) {
+        video_framebuffer_vtg_mode_write(1);
+        video_framebuffer_width_write(0);
+        video_framebuffer_dma_base_write(N64RT_RDRAM_SDRAM);
+        video_framebuffer_vtg_enable_write(1);
+        video_framebuffer_dma_enable_write(1);
+    }
+}
+
 /* Phase-5 on-demand probe for File ID 0 when host did not pre-load ROM during setup */
 u32 n64rt_ondemand_probe(void)
 {
@@ -662,12 +745,17 @@ u32 n64rt_ondemand_probe(void)
     s_rom_res_limit = (sz > LAYOUT_ROM_RESIDENT_MAX) ? OD_RES_PAGED : LAYOUT_ROM_RESIDENT_MAX;
 
     u32 preload = (sz < s_rom_res_limit) ? sz : s_rom_res_limit;
+    od_draw_progress(0u, preload, 1);
     for (u32 off = 0; off < preload; ) {
         u32 chunk = preload - off;
-        if (chunk > 0x00400000u) chunk = 0x00400000u;
+        if (chunk > 0x00100000u) chunk = 0x00100000u; /* 1 MiB steps for smooth progress bar */
         if (od_read_chunk(off, FILE_SDRAM + N64RT_ROM_FILE_OFF + off, chunk) != 0) break;
         off += chunk;
+        od_draw_progress(off, preload, 0);
     }
+    video_framebuffer_dma_enable_write(0);
+    volatile u32 *fb = (volatile u32 *)(uintptr_t)N64RT_RDRAM_SDRAM;
+    for (u32 i = 0; i < 320u * 240u / 2u; i++) fb[i] = 0;
     flush_cpu_dcache();
     flush_cpu_icache();
     return sz;

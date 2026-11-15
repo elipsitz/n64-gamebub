@@ -209,6 +209,7 @@ module gb_host_bridge #(
     output wire logic        vid_horiz_blend_en,
     output wire logic        vid_dither_en,
     output wire logic        vid_no_weave,
+    output wire logic [1:0]  vid_fps_mode,
     output wire logic signed [7:0] sdram_ps_target
 );
 
@@ -269,6 +270,7 @@ module gb_host_bridge #(
     logic [31:0] cmd_host_reg [0:7];
     logic [31:0] cmd_core_reg [0:7];
     logic [31:0] cfg_reg      [0:15];
+    logic [31:0] cfg_fps_reg;
     logic [31:0] slot_file_size [0:15];
 
     assign apf_bridge_file_size = (apf_bridge_slot_id < 16'd16) ? slot_file_size[apf_bridge_slot_id[3:0]] : 32'd0;
@@ -276,6 +278,7 @@ module gb_host_bridge #(
     assign vid_horiz_blend_en = !cfg_reg[8][0];
     assign vid_dither_en      = !cfg_reg[8][1];
     assign vid_no_weave       = cfg_reg[8][2];
+    assign vid_fps_mode       = cfg_fps_reg[1:0];
     assign sdram_ps_target    = $signed(cfg_reg[11][7:0]);
 
     // =========================================================================
@@ -337,6 +340,7 @@ module gb_host_bridge #(
     wire hm_is_sdr   = (host_mem_address[31:26] == 6'd0);                           // 0x0000_0000..0x03FF_FFFF
     wire hm_is_sram  = (host_mem_address >= 32'h3410_0000) && (host_mem_address < 32'h3418_0000);
     wire hm_is_cfg   = (host_mem_address[31:6] == 26'h1C0_0000);                    // 0x7000_0000..0x7000_003F
+    wire hm_is_cfgx  = (host_mem_address == 32'h7000_0040);                         // 0x7000_0040 (FPS Counter)
     wire hm_is_cmdh  = (host_mem_address[31:5] == 27'h780_0000);                    // 0xF000_0000..0xF000_001F
     wire hm_is_cmdc  = (host_mem_address[31:5] == 27'h780_0080);                    // 0xF000_1000..0xF000_101F
 
@@ -403,6 +407,7 @@ module gb_host_bridge #(
                 cfg_reg[i]        <= 32'd0;
                 slot_file_size[i] <= 32'd0;
             end
+            cfg_fps_reg <= 32'd0;
             // Match metadata/settings.json defaults
             cfg_reg[0] <= 32'd1; // Controller 1 Pak = Controller Pak
             cfg_reg[1] <= 32'd1; // Handheld R Mode = R + ABXY = C-Btns
@@ -531,6 +536,12 @@ module gb_host_bridge #(
                             end else begin
                                 host_mem_dataRead <= cfg_reg[cidx];
                             end
+                            host_mem_done <= 1'b1;
+                        end else if (hm_is_cfgx) begin
+                            if (host_mem_write)
+                                cfg_fps_reg <= host_mem_dataWrite;
+                            else
+                                host_mem_dataRead <= cfg_fps_reg;
                             host_mem_done <= 1'b1;
                         end else if (hm_is_cmdh) begin
                             if (host_mem_write)

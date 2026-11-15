@@ -138,6 +138,13 @@ def sha256_short(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
 
 
+def refresh_bitstream_gitrev(bit_path: Path, git_rev: str) -> None:
+    raw = bytearray(bit_path.read_bytes())
+    new_raw = re.sub(rb";GitRev=[0-9a-fA-F]{12}", b";GitRev=" + git_rev.encode("ascii"), bytes(raw), count=1)
+    if len(new_raw) == len(raw) and new_raw != bytes(raw):
+        bit_path.write_bytes(new_raw)
+
+
 def package_one(bundle_name: str) -> None:
     cfg = BUNDLES[bundle_name]
     core_class = cfg["core_class"]
@@ -154,9 +161,11 @@ def package_one(bundle_name: str) -> None:
         shutil.rmtree(out_root)
     core_dir.mkdir(parents=True, exist_ok=True)
 
+    git_rev = subprocess.check_output(["git", "rev-parse", "--short=12", "HEAD"], cwd=ROOT, text=True).strip()
     dst_bit = core_dir / bit_name
     dst_hs = core_dir / (bit_name + ".hs")
     shutil.copy2(src_bit, dst_bit)
+    refresh_bitstream_gitrev(dst_bit, git_rev)
     encode_heatshrink(dst_bit, dst_hs)
 
     shutil.copy2(ROOT / cfg["core_json"], core_dir / "core.json")
@@ -171,7 +180,6 @@ def package_one(bundle_name: str) -> None:
         shutil.copy2(rt_bin, core_dir / "n64rt.sys")
         shutil.copy2(ROOT / "assets" / "n64savedb.txt", core_dir / "n64savedb.txt")
 
-    git_rev = subprocess.check_output(["git", "rev-parse", "--short=12", "HEAD"], cwd=ROOT, text=True).strip()
     metrics = extract_vivado_metrics(build_dir)
 
     lines = [

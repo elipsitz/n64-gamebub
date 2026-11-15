@@ -7,7 +7,7 @@ Nintendo 64 FPGA core for the **Game Bub Rev4** handheld (`XC7A100TCSG324-1`), a
 - **Single-MMCM Clock Tree (`rtl/board/n64_mmcm.sv`):** Single `MMCME2_ADV` (`VCO = 750.000 MHz` from `50.000 MHz` reference, `0.000 ppm` error):
   - `62.500 MHz` (`/12`): `clk_sys` — N64 RCP (`RSP`, `RDP`, `VI`, `AI`, `SI`, `PI2`, `MI`) & Game Bub `clockOutSystem`
   - `93.750 MHz` (`/8`): `clk_cpu` — N64 `VR4300` + `COP1` FPU (`3:2` synchronous to `clk_sys`)
-  - `125.000 MHz` (`/6`): `clk_sys2x` + phase-shifted `clk_sdram_pad` (`-135°` base + runtime `MMCME2_ADV` fine phase shift)
+  - `125.000 MHz` (`/6`): `clk_sys2x` + phase-shifted `clk_sdram_pad` (`-150°` centered VCO tap + runtime `MMCME2_ADV` fine phase shift, with 100% `ILOGICE2.IFF` / `OLOGICE2.OUTFF` / `OLOGICE2.TFF` pad IOB packing)
   - `187.500 MHz` (`/4`): `clk_spi` — MCU QSPI oversampling (`clockOutSpi`)
   - `30.000 MHz` (`/25`): `clk_display` — Rev4 `ILI9806E` display clock (`clockOutDisplay`)
   - `25.000 MHz` (`/30`): `clk_vid` — N64 `VI` active-window pixel timing generator
@@ -26,7 +26,7 @@ Nintendo 64 FPGA core for the **Game Bub Rev4** handheld (`XC7A100TCSG324-1`), a
     - `0x40000 – 0x67FFF` (`160 KiB`): Cartridge Domain-2 Save (`File ID 1`, `.sav`: `EEPROM 4K/16K`, `SRAM 32K`, `FlashRAM 128K` + silicon ID)
     - `0x68000 – 0x77FFF` (`64 KiB`): Zero-SDRAM-contention L2 Cartridge ROM Cache (paired with `16 KiB` L1 BRAM burst cache)
 - **Video, Audio, Controls, & Host I/O:**
-  - `VideoV0(320, 240, 6, 6, 6)` (`n64_video_gb_downsampler.sv`): `640->320` horizontal blend + `480i/p->240p` vertical weave de-interlacing + `2x2` Bayer ordered dithering (`RGB888 -> RGB666`), scaled `2x` by `HandheldTop` to `640x480` (4:3) on both LCD and Dock HDMI.
+  - `VideoV0(320, 240, 6, 6, 6)` (`n64_video_gb_downsampler.sv`): `640->320` horizontal blend + `480i/p->240p` vertical weave de-interlacing + `2x2` Bayer ordered dithering (`RGB888 -> RGB666`) + optional zero-BRAM `Top-Right` / `Top-Left` live N64 `FPS Counter` badge, scaled `2x` by `HandheldTop` to `640x480` (4:3) on both LCD and Dock HDMI.
   - `AudioV0`: Exact `48,000.000 Hz` (`12 / 15,625` of `62.5 MHz`) 16-bit stereo ring buffer fed by `rcp_ai`.
   - `InputExtendedV0(numSlots = 4)` + `VibrateV0`: Up to 4 docked analog/digital gamepads + handheld `R`-modifier C-button presets + Player 1 Rumble Pak motor support.
 
@@ -36,11 +36,11 @@ Nintendo 64 FPGA core for the **Game Bub Rev4** handheld (`XC7A100TCSG324-1`), a
 
 | Core Class (`Bundle`) | Slice LUTs (`63,400`) | Slice Regs (`126,800`) | Block RAM (`135`) | `DSP48E1` (`240`) | `WNS` (`ns`) | `WHS` (`ns`) | `WPWS` (`ns`) | `.bit.hs` Size |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **`N64MemDiagCore`** (`01-mem-diag`) | `7,121` (`11.23%`) | `4,028` (`3.18%`) | `86.5` (`64.07%`) | `0` (`0.00%`) | **`+0.316`** | **`+0.055`** | **`+2.167`** | `384,940 B` |
-| **`N64SelfTestCore`** (`02-mips-self-test`) | `35,865` (`56.57%`) | `20,079` (`15.84%`) | `131.5` (`97.41%`) | `44` (`18.33%`) | **`+0.054`** | **`+0.051`** | **`+2.167`** | `1,445,278 B` |
-| **`N64Core`** (`03..05` Production Core) | **`35,712` (`56.33%`)** | **`20,065` (`15.82%`)** | **`129.5` (`95.93%`)** | **`44` (`18.33%`)** | **`+0.204`** | **`+0.055`** | **`+2.167`** | **`1,437,235 B`** |
+| **`N64MemDiagCore`** (`01-mem-diag`) | `7,122` (`11.23%`) | `3,977` (`3.14%`) | `86.5` (`64.07%`) | `0` (`0.00%`) | **`+0.584`** | **`+0.038`** | **`+2.167`** | `383,945 B` |
+| **`N64SelfTestCore`** (`02-mips-self-test`) | `35,559` (`56.09%`) | `20,257` (`15.98%`) | `128.5` (`95.19%`) | `44` (`18.33%`) | **`+0.264`** | **`+0.030`** | **`+2.167`** | `1,414,550 B` |
+| **`N64Core`** (`03..05` Production Core) | **`35,464` (`55.94%`)** | **`20,255` (`15.97%`)** | **`126.5` (`93.70%`)** | **`44` (`18.33%`)** | **`+0.213`** | **`+0.029`** | **`+2.167`** | **`1,412,318 B`** |
 
-All three bitstreams build with **`0` Critical Warnings, `0` DRC Errors, `0` latches, and `0.000 ns` `TNS`/`THS`**.
+All three bitstreams build with **`0` Critical Warnings, `0` DRC Errors, `0` latches, 100% IOB-packed SDRAM/SRAM buses (`36 ps` pin-to-pin DQ skew), and `0.000 ns` `TNS`/`THS`**.
 
 ---
 
@@ -57,7 +57,8 @@ Each folder under `dist/<bundle>/cores/` can be copied directly onto the root `c
    - Copy `cores/GameBub.N64/` to `/cores/GameBub.N64/` on your microSD card and place `.z64`, `.n64`, or `.v64` ROMs in your ROMs folder.
    - Automatically byteswaps `.v64`/`.n64` images in hardware, detects save type (`EEPROM 4K/16K`, `SRAM 32K`, `FlashRAM 128K`) via `n64savedb.txt`, persists `.sav` and `.mpk` files via `HostV0`, and exposes Pak type, handheld control presets, deadzone, Expansion Pak toggle, `VI Deblur`, `32-Bit Color` shadow plane, overscan crop, and `Restart Game` in `settings.json`.
 4. **`dist/05-n64-64mb-ondemand/cores/GameBub.N64/` — Phase 5 `64 MiB` On-Demand Paging Bundle**
-   - Identical `N64Core` bitstream paired with `on_demand: true` `files.json` (`metadata/files_ondemand.json`), streaming resident ROM + `64 KiB` tail pages (`51..64 MiB`) on demand via `HostV0` Core->Host commands (`0x0400` `FileGetSize` & `0x0402` `FileRead`) to support `64 MiB` titles (*Resident Evil 2*, *Pokemon Stadium 2*, *Conker's Bad Fur Day*, *Paper Mario*).
+   - Identical `N64Core` bitstream paired with `on_demand: true` `files.json` (`metadata/files_ondemand.json`), displaying a live on-screen `"NINTENDO 64 / LOADING ROM..."` progress bar while streaming up to `51 MiB` into resident SDRAM plus `64 KiB` tail pages (`51..64 MiB`) on demand via `HostV0` Core->Host commands (`0x0400` `FileGetSize` & `0x0402` `FileRead`) to support `64 MiB` titles (*Resident Evil 2*, *Pokemon Stadium 2*, *Conker's Bad Fur Day*, *Paper Mario*).
+   - For standard `<= 52 MiB` cartridges (*Super Mario 64*, *Mario Kart 64*, *Animal Forest*, *Ocarina of Time*, *Majora's Mask*, *Banjo-Kazooie*), `03-n64-core` / `04-n64-polished` eagerly stream the entire ROM during MCU `Setup` using Game Bub's native `"Loading..."` screen with zero in-game SD paging latency.
 
 ---
 

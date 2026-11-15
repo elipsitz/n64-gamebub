@@ -15,13 +15,16 @@ While implementing `GameBub.N64` (`MIRLO64` on `XC7A100TCSG324-1`) against the *
 
 ---
 
-## 2. Small Framework Enhancement Applied & Upstream Packaging Note (`framework/`)
+## 2. Small Backwards-Compatible Framework Enhancements Applied & Upstream Notes (`framework/`)
 
-To keep upstream `MIRLO64` RTL unmodified wherever possible, we made **one small file-discovery enhancement** in `framework/` (on detached `HEAD`) and noted one optional Python dependency improvement for upstream:
+To keep upstream `MIRLO64` RTL unmodified wherever possible and close `125 MHz` physical SDRAM I/O timing cleanly on Artix-7 (`XC7A100TCSG324-1`), we made **two small backwards-compatible enhancements** in `framework/` (on detached `HEAD`) and noted one optional Python dependency improvement for upstream:
 
 1. **Applied in `framework/scripts/build_core.py` — Support Verilog Include (`.vh`/`.svh`) and Memory Init (`.hex`/`.mem`) Files ([build_core.py](file:///usr/local/google/home/elipsitz/Downloads/gamebub-n64/framework/scripts/build_core.py#L141-L159)):**
    - Upstream `build_core.py` filtered `additional_file_dirs` to `{".xdc", ".v", ".sv", ".vhdl"}` only, skipping `.vh`, `.svh`, `.hex`, and `.mem` files. We registered `.vh`/`.svh` (`file_type="verilogSource"` / `"systemVerilogSource"`, `is_include_file=True`) and `.hex`/`.mem` (`file_type="mem"`, mapped by Edalize to Vivado `read_mem`) so `MIRLO64`'s `$readmemh("rsp_div_rom.hex", ...)`, `$readmemh("boot.hex", ...)`, and `` `include "mirlo_regs.svh" `` synthesize directly without modifying `MIRLO64`.
-2. **Optional Upstream Note — Include `heatshrink2` in `pyBuildCore.pythonDeps` ([package.mill](file:///usr/local/google/home/elipsitz/Downloads/gamebub-n64/framework/package.mill#L66)):**
+2. **Applied in `SdramV0.scala`, `SramV0.scala`, `HandheldTop.scala`, & `top.sv` — Optional `perBitDataTri` for `>= 125 MHz` 7-Series `OLOGICE2.TFF` IOB Packing:**
+   - Upstream `SdramV0` and `SramV0` expose a single scalar `dataDir: Bool` driving all 16 `sdram_dq[15:0]` / `sram_io[15:0]` tristate buffers. Because a single flip-flop cannot fan out to 16 `OLOGICE2.TFF` sites, Vivado ignores `set_property IOB TRUE [get_ports sdram_dq[*]]` (`Constraints 18-5573`) and places the tristate register in interior `SLICE` fabric (`9.311 ns` `C -> sdram_dq` delay on a `125 MHz` / `8.000 ns` bus, corrupting Beat 0 of SDRAM burst writes on physical hardware).
+   - We added an optional `perBitDataTri: Boolean = false` parameter (`dataTri: Option[UInt]`, active-high tristate matching Xilinx `IOBUF.T`) to `SdramV0` and `SramV0`, defaulting to `Fill(dataWidth, !dataDir)` in `HandheldTop.scala` so all existing cores compile unchanged while `>= 125 MHz` cores co-pack `ILOGICE2.IFF` (`1.45..1.49 ns`), `OLOGICE2.OUTFF` (`3.45..3.49 ns`), and `OLOGICE2.TFF` (`3.54..3.58 ns`, `36 ps` skew) 100% inside the pad IOBs.
+3. **Optional Upstream Note — Include `heatshrink2` in `pyBuildCore.pythonDeps` ([package.mill](file:///usr/local/google/home/elipsitz/Downloads/gamebub-n64/framework/package.mill#L66)):**
    - [build_core.py](file:///usr/local/google/home/elipsitz/Downloads/gamebub-n64/framework/scripts/build_core.py#L201-L208) attempts `import heatshrink2` to emit compressed `.bit.hs` bitstreams (`window_sz2=9, lookahead_sz2=6`), silently skipping compression on `ImportError`, while `pyBuildCore.pythonDeps` currently lists only `Seq("edalize==0.6.7")`. Adding `"heatshrink2"` enables automatic `.bit.hs` generation inside Mill's isolated Python venv (our `tools/package_dist.py` also generates `.bit.hs` directly).
 
 ---

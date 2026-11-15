@@ -118,6 +118,18 @@
       "address": "0x70000028",
       "type": "action",
       "value": "0x1"
+    },
+    {
+      "id": 11,
+      "label": "FPS Counter",
+      "address": "0x70000040",
+      "type": "list",
+      "default": "0x1",
+      "items": [
+        { "label": "Top-Right", "value": "0x1" },
+        { "label": "Top-Left",  "value": "0x2" },
+        { "label": "Off",       "value": "0x0" }
+      ]
     }
   ]
 }
