@@ -84,7 +84,7 @@ assign clr = wr_s && a == 3'd6;
 // ---------------------------------------------------------------- PIF RAM: a block RAM of 16 words
 // Two ports, never writing in one cycle: the CPU's (port A: its word, at ca) and the DMA's (port B: the engine's word, at idx), each
 // read at its own address at every clock -- no choice of address or data in front of the RAM
-(* ramstyle = "M10K, no_rw_check" *) reg [31:0] m [0:15];
+(* ram_style = "distributed" *) reg [31:0] m [0:15];
 reg [31:0] qa, qb;
 integer ii;
 initial for (ii = 0; ii < 16; ii = ii + 1) m[ii] = 32'd0;
@@ -92,12 +92,12 @@ function automatic logic [31:0] w15m(input logic [3:0] wa, input logic [31:0] wd
     return wa == 4'd15 ? {wd[31:8], 6'd0, wd[1], 1'b0} : wd;
 endfunction
 wire         eng_wr = st == S_REQ && ack && !dir_rd;
+wire         cpu_wr = c_wr_s && !busy;
+wire  [3:0]  m_wa   = eng_wr ? idx : ca;
+wire  [31:0] m_wd   = eng_wr ? w15m(idx, rdata) : w15m(ca, c_wd);
 always @(posedge clk) begin
-    if (c_wr_s && !busy) m[ca] <= w15m(ca, c_wd);
+    if (eng_wr || cpu_wr) m[m_wa] <= m_wd;
     qa <= m[ca];
-end
-always @(posedge clk) begin
-    if (eng_wr) m[idx] <= w15m(idx, rdata);
     qb <= m[idx];
 end
 assign c_q   = qa;

@@ -81,11 +81,18 @@ static int rom_has_banner(void)
     }
     return 0;
 }
-/* the ROM offset of the ELF file, or 0 (searched in the whole file; the boot code searches 64 MiB) */
+/* the ROM offset of the ELF file, or 0 (searched in the resident ROM via direct SDRAM window) */
+static u32 hdr_word(u32 o)
+{
+    const u32 lim = n64rt_rom_resident_limit();
+    return (o < lim) ? *(const volatile u32 *)(uintptr_t)(0x40100000u + o) : n64rt_rom_word(o);
+}
 static u32 rom_elf(u32 size)
 {
-    for (u32 o = 0x1000u; o + 0x40u <= size; o += 0x100u)
-        if (ROM[o >> 2] == 0x7F454C46u) return o;
+    const u32 lim = n64rt_rom_resident_limit();
+    const u32 scan = (size < lim) ? size : lim;
+    for (u32 o = 0x1000u; o + 0x40u <= scan; o += 0x100u)
+        if (hdr_word(o) == 0x7F454C46u) return o;
     return 0;
 }
 
@@ -132,7 +139,7 @@ int main(void)
         if (elf) {                       /* the program is an ELF file: its segments and its entry (n64rt_boot.c) */
             g.ipl3 = N64RT_IPL3_ELF;
             g.elf_off = elf;
-            g.entry = ROM[(elf >> 2) + 1u] >> 24 == 2u ? ROM[(elf >> 2) + 7u] : ROM[(elf >> 2) + 6u];    /* (ELF64: the low word) */
+            g.entry = hdr_word(elf + 4u) >> 24 == 2u ? hdr_word(elf + 28u) : hdr_word(elf + 24u);    /* (ELF64: the low word) */
             printf("loader: an open-source IPL3: the ELF file at ROM %08lx, entry %08lx\n", (unsigned long)elf, (unsigned long)g.entry);
         } else {                         /* a flat file: the header's word says how much */
             u32 len = ROM[4];

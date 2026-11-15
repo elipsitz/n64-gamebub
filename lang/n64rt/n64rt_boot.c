@@ -707,7 +707,7 @@ static u32 file_word(u32 off)
 }
 u32 n64rt_rom_word(u32 off)
 {
-    return file_word(n64rt_game->rom_sdram - FILE_SDRAM + off);
+    return file_word((n64rt_game ? (n64rt_game->rom_sdram - FILE_SDRAM) : N64RT_ROM_FILE_OFF) + off);
 }
 void n64rt_rom_copy(void *dst, u32 off, u32 size)
 {

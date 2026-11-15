@@ -53,7 +53,10 @@ module n64_video #(
     parameter logic [23:0] ORIGIN_MASK = 24'h1FFFFF,   // word address: the N64's 8 MiB RDRAM
     // the framebuffer is the N64's own -- RGBA5551, the left pixel in the
     // word's high half (rtl/rdp) -- not RDP's RGB565 with it in the low half
-    parameter bit N64FB = 1'b0
+    parameter bit N64FB = 1'b0,
+    parameter int FAW = 11,                            // 2,048 words (~12.8 rows, 3.5 RAMB36E1s)
+    parameter logic [23:0] SHADOW_BASE = 24'hD4_0000,  // 2 MiB shadow plane at 0x4350_0000
+    parameter bit COL9 = 1'b1                          // 1: W9825G6KH-6 9-bit col bank permutation
 ) (
     input  wire         clk,            // sys
     input  wire         rst,
@@ -263,7 +266,6 @@ logic [23:0] rowp;                 // the row's first word
 logic [9:0]  yacc;                 // the row step's fraction
 logic        rs_next;              // the next colour word is its row's first
 logic        wodd;                 // (a woven frame) the row being read is the second field's line
-localparam int FAW = 14;           // the FIFO: 2^14 words
 logic [9:0]  drop;                 // the last frame's reads still to come back (not written)
 logic [FAW:0] wlevel;              // the FIFO's fill as sys sees it (words)
 wire         keep = m_rvalid && !fb_sys && drop == 0;
@@ -413,10 +415,11 @@ always_ff @(posedge clk) low <= (16'(wlevel) + inflight) < 16'(1 << (FAW - 2));
 assign m_urgent = low;
 assign m_valid  = running && !fb_sys && drop == 0 && room
                   && !all && tq_n < 6'd30;
-// (the hidden plane: SDRAM 0x0370_0000; the shadow plane's word: rtl/soc/mirlo_mips.sv's fold of the RDP's address)
+// (the hidden plane: SDRAM 0x0370_0000; the shadow plane's word: n64_soc_gb.sv's fold of the RDP's address)
 wire  [19:0] sh_n = raddr[20:1];
-wire  [18:0] sh_w = {sh_n[18:11] ^ {sh_n[19], 7'd0}, sh_n[9:8] ^ 2'b01, sh_n[10], sh_n[7:0]};
-assign m_addr   = m_hid ? 24'hDC_0000 + {6'd0, raddr[20:3]} : m_shd ? 24'hC8_0000 + {5'd0, sh_w} : raddr;
+wire  [18:0] sh_w = COL9 ? {sh_n[18:10] ^ {sh_n[19], 8'd0}, sh_n[8:7] ^ 2'b01, sh_n[9],  sh_n[6:0]}
+                         : {sh_n[18:11] ^ {sh_n[19], 7'd0}, sh_n[9:8] ^ 2'b01, sh_n[10], sh_n[7:0]};
+assign m_addr   = m_hid ? 24'hDC_0000 + {6'd0, raddr[20:3]} : m_shd ? SHADOW_BASE + {5'd0, sh_w} : raddr;
 
 // ------------------------------------------------------------------ the FIFO
 logic        f_rd, f_empty;
@@ -498,8 +501,8 @@ wire        nx_pv  = nv && hd_ok && !flush;
 logic       aa_on, dd_on, dv_on;
 // lb1 (the row the filters centre on) keeps a 32-bit picture's three low bits of each channel with the pixel (the core's 32-bit
 // output option; else they are 0): {R, G, B low bits, the 19-bit pixel}
-(* ramstyle = "M10K, no_rw_check" *) logic [27:0] lb1 [0:1023];
-(* ramstyle = "M10K, no_rw_check" *) logic [18:0] lb2 [0:1023];
+(* ram_style = "block" *) logic [27:0] lb1 [0:1023];
+(* ram_style = "block" *) logic [18:0] lb2 [0:1023];
 logic [27:0] lq1r;
 logic [18:0] lq2r;                 // the line buffers' reads
 logic        lq_c, lq_a;           // ... that were of rows in the window
@@ -697,7 +700,7 @@ wire  crop = blk_s[1] || vcount > lin_v                 // (active lines are vco
 // darker (Star Fox 64).
 logic [1:0] gam_s;
 always_ff @(posedge clk_vid) gam_s <= {gam_s[0], gamma};
-(* romstyle = "M10K" *) logic [7:0] gtab [0:255];
+(* rom_style = "distributed" *) logic [7:0] gtab [0:255];
 function automatic logic [7:0] gsqrt(input int v);        // 2 floor(sqrt(64 v))
     int r;
     r = 0;

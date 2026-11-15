@@ -74,7 +74,7 @@ module rcp_vi (
 );
 
 // ---------------------------------------------------------------- the registers: a RAM; what the hardware uses
-(* ramstyle = "M10K, no_rw_check" *) reg [31:0] m [0:15];
+(* ram_style = "distributed" *) reg [31:0] m [0:15];
 reg [31:0] q;
 integer ii;
 initial for (ii = 0; ii < 16; ii = ii + 1) m[ii] = 32'd0;

@@ -39,6 +39,23 @@ module n64_mmcm #(
     logic ps_busy = 1'b0;
     wire  ps_done;
 
+`ifdef VERILATOR
+    logic sim_clk_sys   /* verilator public_flat_rw */ = 1'b0;
+    logic sim_clk_cpu   /* verilator public_flat_rw */ = 1'b0;
+    logic sim_clk_sys2x /* verilator public_flat_rw */ = 1'b0;
+    logic sim_clk_vid   /* verilator public_flat_rw */ = 1'b0;
+
+    assign clk_sys       = sim_clk_sys;
+    assign clk_cpu       = sim_clk_cpu;
+    assign clk_sys2x     = sim_clk_sys2x;
+    assign clk_sdram_pad = sim_clk_sys2x;
+    assign clk_spi       = sim_clk_sys2x;
+    assign clk_display   = sim_clk_vid;
+    assign clk_vid       = sim_clk_vid;
+    assign locked        = 1'b1;
+    assign ps_done       = ps_busy;
+    wire _unused_verilator = clk_in_50mhz;
+`else
     MMCME2_ADV #(
         .BANDWIDTH            ("OPTIMIZED"),
         .CLKOUT4_CASCADE      ("FALSE"),
@@ -132,6 +149,7 @@ module n64_mmcm #(
     BUFG u_bufg_spi     (.I(clk_spi_unbuf),     .O(clk_spi));
     BUFG u_bufg_display (.I(clk_display_unbuf), .O(clk_display));
     BUFG u_bufg_vid     (.I(clk_vid_unbuf),     .O(clk_vid));
+`endif
 
     // Automatic fine-phase-shift tracking FSM (~12 PSCLK cycles per 23.8 ps step)
     always_ff @(posedge clk_sys) begin

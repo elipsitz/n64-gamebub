@@ -14,7 +14,7 @@ module afifo #(parameter int W = 32, parameter int AW = 9) (
     output logic [W-1:0] r_data,
     output logic         r_empty
 );
-logic [W-1:0] mem [1 << AW];
+(* ram_style = "block" *) logic [W-1:0] mem [1 << AW];
 function automatic logic [AW:0] g(input logic [AW:0] b); return b ^ (b >> 1); endfunction
 function automatic logic [AW:0] b(input logic [AW:0] gg);
     logic [AW:0] r; r[AW] = gg[AW];

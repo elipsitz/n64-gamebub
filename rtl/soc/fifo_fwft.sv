@@ -14,7 +14,7 @@ module fifo_fwft #(parameter int W = 32, parameter int AW = 11) (
     output logic [W-1:0] out_data,
     output logic [AW:0]  level
 );
-logic [W-1:0] mem [1 << AW];
+(* ram_style = "block" *) logic [W-1:0] mem [1 << AW];
 logic [AW:0]  wp, rp;
 logic         stale;                        // out_data was read at the address written at the same edge
 wire          push = in_valid && in_ready;

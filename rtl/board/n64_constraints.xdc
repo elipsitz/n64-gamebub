@@ -9,3 +9,11 @@ set_property IOB TRUE [get_ports {sram_a[*] sram_ce_n sram_we_n sram_oe_n sram_u
 
 # Fast slew on 125 MHz SDRAM clock and command/data signals
 set_property SLEW FAST [get_ports {sdram_clk sdram_dq[*] sdram_a[*] sdram_bs[*] sdram_cs_n[*] sdram_ras_n sdram_cas_n sdram_we_n sdram_ldqm sdram_udqm}]
+
+# N64 VI pixel clock (clk_vid, 25.000 MHz on MMCME2_ADV CLKOUT6) is an
+# asynchronous CDC domain crossing to clk_sys exclusively via Gray-code AFIFOs
+# and 2-FF synchronizers (afifo.sv, n64_video.sv, n64_video_gb_downsampler.sv).
+# NOTE: clk_sys (62.5 MHz), clk_cpu (93.75 MHz, 3:2), and clk_sys2x (125 MHz, 2:1)
+# remain strictly synchronous and fully timed by Vivado STA.
+set_clock_groups -name async_n64_vid -asynchronous \
+    -group [get_clocks -quiet -of_objects [get_pins -quiet -hierarchical *u_mmcme2_adv/CLKOUT6]]
