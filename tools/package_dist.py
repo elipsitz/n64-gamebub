@@ -107,9 +107,12 @@ def extract_vivado_metrics(build_dir: Path) -> dict[str, str]:
             ("RAMB18", "ramb18"),
             ("DSPs", "dsps"),
         ]:
-            m = re.search(rf"\|\s*{re.escape(label)}\s*\|\s*([0-9.]+)\s*\|\s*[0-9.]+\s*\|\s*[0-9.]+\s*\|\s*([0-9.]+)", txt)
+            m = re.search(
+                rf"\|\s*{re.escape(label)}\s*\|\s*([0-9.]+)\s*\|\s*[0-9.]+\s*\|\s*[0-9.]+\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)",
+                txt,
+            )
             if m:
-                metrics[key] = f"{m.group(1)} ({m.group(2)}%)"
+                metrics[key] = f"{m.group(1)} / {m.group(2)} ({m.group(3)}%)"
 
     for tim_rpt in impl.glob("*_timing_summary_routed.rpt"):
         txt = tim_rpt.read_text(errors="replace")
