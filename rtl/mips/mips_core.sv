@@ -550,7 +550,7 @@ function automatic logic cacheable(input logic [31:0] va, input logic gv);
 endfunction
 
 // =============================================================== state
-logic [31:0] rf_lo [32];
+(* ram_style = "distributed" *) logic [31:0] rf_lo [32];
 // no reset: MLABs (the hardware's registers are undefined at power-up; the
 // co-simulation starts both machines from zero)
 initial for (int i = 0; i < 32; i++) rf_lo[i] = 0;
@@ -783,7 +783,7 @@ logic        rd_res, rd_fix, e_bp;
 localparam int BH = 6;
 // (a 2-bit counter by the branch's address: its upper bit is the guess of a forward branch, and a backward one is guessed taken unless the
 // counter is 0. The counter F read goes down the pipeline with the branch (d_bs, e_bs, rd_bs), and what it becomes is written from there)
-(* ramstyle = "MLAB, no_rw_check" *) logic [1:0] bh [0:(1 << BH) - 1];
+(* ram_style = "distributed" *) logic [1:0] bh [0:(1 << BH) - 1];
 initial for (int i = 0; i < (1 << BH); i++) bh[i] = 2'd0;
 logic [1:0]  d_bs, e_bs, rd_bs;
 logic [BH-1:0] rd_bi;                       // the address bits of the branch that left E (rd_res)
@@ -793,7 +793,7 @@ logic        d_k_cti, d_k_pred;              // FAST: D's instruction is a branc
 // address behind its delay slot, a jr $ra that leaves D pops one), d_jt (a word address) while it is in D; E compares the register with it
 // (rd_fix). A stack that has nothing is no guess.
 localparam int RASN = 4;
-(* ramstyle = "MLAB, no_rw_check" *) logic [29:0] ras [0:RASN-1];
+(* ram_style = "distributed" *) logic [29:0] ras [0:RASN-1];
 logic [$clog2(RASN)-1:0] ras_t;              // the top
 logic [$clog2(RASN):0]   ras_n;              // how many are valid
 logic [29:0] d_jt;
@@ -1630,8 +1630,8 @@ always_ff @(posedge clk) begin
     rf_xv <= w_wr; rf_xrd <= w_c.rd; rf_xlo <= w_res;
 end
 generate if (W64) begin : g_hx
-    logic [31:0] rf_hx [32];
-    logic        rf_hw [32];
+    (* ram_style = "distributed" *) logic [31:0] rf_hx [32];
+    (* ram_style = "distributed" *) logic        rf_hw [32];
     initial for (int i = 0; i < 32; i++) begin rf_hx[i] = 0; rf_hw[i] = 0; end
     always_ff @(posedge clk) begin
         rfq_ah <= rf_hx[rf_rinsn[25:21]]; rfq_bh <= rf_hx[rf_rinsn[20:16]];
@@ -1843,7 +1843,7 @@ generate if (SNOOP) begin : g_sn
     logic [9:0]    c_q;                                  // the copy's entry at R's index
     logic [9:0]    sn_dup [DC_LINES];
     logic [DC_LOG2-1:0] h_idx;
-    (* ramstyle = "MLAB" *) logic [DC_LOG2-1:0] sn_q [8];      // (not an M10K of its own)
+    (* ram_style = "distributed" *) logic [DC_LOG2-1:0] sn_q [8];      // (not a block RAM of its own)
     logic [2:0]    q_r, q_w;
     logic [3:0]    q_n;
     wire           r_v = sn_ts != sn_seen;

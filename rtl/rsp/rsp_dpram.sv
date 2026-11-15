@@ -5,10 +5,10 @@
 // (a_we[b]: byte b, address mod 16 = b), the data the same way (byte b in
 // a_dat_w[127 - 8b -: 8]); the read data, in that order too, the cycle after
 // the row. Port b reads a word (the RDP's XBUS reads), the cycle after its
-// address. On the FPGA each bank is altsyncram in M10K, true dual port
-// (inferring one with byte enables is not dependable); in simulation the
-// same behaviour in plain SystemVerilog, one array of 1024 words in address
-// order (the testbenches read DMEM there).
+// address. On Artix-7 each bank uses two 18-bit TDP RAMB18E1 primitives
+// (8 x RAMB18E1 = 4.0 Block RAM tiles total) with hardware byte write enables;
+// in simulation the same behaviour in plain SystemVerilog, one array of 1024
+// words in address order (the testbenches read DMEM there).
 `default_nettype none
 
 module rsp_dpram (
@@ -35,62 +35,84 @@ module rsp_dpram (
     logic [31:0] qb [4];
     always_ff @(posedge clk) b_k <= b_adr[1:0];
     assign b_dat_r = qb[b_k];
+
     genvar k;
     generate for (k = 0; k < 4; k++) begin : bank
-        wire [3:0] we = {a_we[4 * k], a_we[4 * k + 1], a_we[4 * k + 2], a_we[4 * k + 3]};   // ([3]: the word's first byte)
-        altsyncram #(
-            .operation_mode                     ("BIDIR_DUAL_PORT"),
-            .width_a                            (32),
-            .widthad_a                          (8),
-            .numwords_a                         (256),
-            .width_b                            (32),
-            .widthad_b                          (8),
-            .numwords_b                         (256),
-            .width_byteena_a                    (4),
-            .width_byteena_b                    (1),
-            .byte_size                          (8),
-            .outdata_reg_a                      ("UNREGISTERED"),
-            .outdata_reg_b                      ("UNREGISTERED"),
-            .address_reg_b                      ("CLOCK0"),
-            .indata_reg_b                       ("CLOCK0"),
-            .wrcontrol_wraddress_reg_b          ("CLOCK0"),
-            .outdata_aclr_a                     ("NONE"),
-            .outdata_aclr_b                     ("NONE"),
-            .clock_enable_input_a               ("BYPASS"),
-            .clock_enable_input_b               ("BYPASS"),
-            .clock_enable_output_a              ("BYPASS"),
-            .clock_enable_output_b              ("BYPASS"),
-            .read_during_write_mode_mixed_ports ("DONT_CARE"),
-            .read_during_write_mode_port_a      ("NEW_DATA_NO_NBE_READ"),
-            .read_during_write_mode_port_b      ("NEW_DATA_NO_NBE_READ"),
-            .power_up_uninitialized             ("FALSE"),
-            .ram_block_type                     ("M10K"),
-            .intended_device_family             ("Cyclone V"),
-            .lpm_type                           ("altsyncram")
-        ) ram (
-            .clock0         (clk),
-            .address_a      (a_row[8 * k +: 8]),
-            .data_a         (a_dat_w[127 - 32 * k -: 32]),
-            .wren_a         (|we),
-            .byteena_a      (we | {4{~(|we)}}),
-            .q_a            (a_dat_r[127 - 32 * k -: 32]),
-            .address_b      (b_adr[9:2]),
-            .data_b         (32'd0),
-            .wren_b         (1'b0),
-            .byteena_b      (1'b1),
-            .q_b            (qb[k]),
-            .aclr0          (1'b0),
-            .aclr1          (1'b0),
-            .addressstall_a (1'b0),
-            .addressstall_b (1'b0),
-            .clock1         (1'b1),
-            .clocken0       (1'b1),
-            .clocken1       (1'b1),
-            .clocken2       (1'b1),
-            .clocken3       (1'b1),
-            .eccstatus      (),
-            .rden_a         (1'b1),
-            .rden_b         (1'b1)
+        wire [7:0]  row_a = a_row[8 * k +: 8];
+        wire [31:0] w_dat = a_dat_w[127 - 32 * k -: 32];
+        wire [31:0] r_dat;
+        assign a_dat_r[127 - 32 * k -: 32] = r_dat;
+
+        // Upper halfword [31:16]: WEA[1] -> [31:24] (byte 4k+0), WEA[0] -> [23:16] (byte 4k+1)
+        RAMB18E1 #(
+            .DOA_REG        (0),
+            .DOB_REG        (0),
+            .RAM_MODE       ("TDP"),
+            .READ_WIDTH_A   (18),
+            .READ_WIDTH_B   (18),
+            .WRITE_WIDTH_A  (18),
+            .WRITE_WIDTH_B  (18),
+            .WRITE_MODE_A   ("WRITE_FIRST"),
+            .WRITE_MODE_B   ("WRITE_FIRST")
+        ) ram_hi (
+            .CLKARDCLK      (clk),
+            .CLKBWRCLK      (clk),
+            .ENARDEN        (1'b1),
+            .ENBWREN        (1'b1),
+            .REGCEAREGCE    (1'b1),
+            .REGCEB         (1'b1),
+            .RSTRAMARSTRAM  (1'b0),
+            .RSTRAMB        (1'b0),
+            .RSTREGARSTREG  (1'b0),
+            .RSTREGB        (1'b0),
+            .ADDRARDADDR    ({2'b00, row_a, 4'b0000}),
+            .ADDRBWRADDR    ({2'b00, b_adr[9:2], 4'b0000}),
+            .DIADI          (w_dat[31:16]),
+            .DIBDI          (16'd0),
+            .DIPADIP        (2'b00),
+            .DIPBDIP        (2'b00),
+            .WEA            ({a_we[4 * k + 0], a_we[4 * k + 1]}),
+            .WEBWE          (4'b0000),
+            .DOADO          (r_dat[31:16]),
+            .DOBDO          (qb[k][31:16]),
+            .DOPADOP        (),
+            .DOPBDOP        ()
+        );
+
+        // Lower halfword [15:0]: WEA[1] -> [15:8] (byte 4k+2), WEA[0] -> [7:0] (byte 4k+3)
+        RAMB18E1 #(
+            .DOA_REG        (0),
+            .DOB_REG        (0),
+            .RAM_MODE       ("TDP"),
+            .READ_WIDTH_A   (18),
+            .READ_WIDTH_B   (18),
+            .WRITE_WIDTH_A  (18),
+            .WRITE_WIDTH_B  (18),
+            .WRITE_MODE_A   ("WRITE_FIRST"),
+            .WRITE_MODE_B   ("WRITE_FIRST")
+        ) ram_lo (
+            .CLKARDCLK      (clk),
+            .CLKBWRCLK      (clk),
+            .ENARDEN        (1'b1),
+            .ENBWREN        (1'b1),
+            .REGCEAREGCE    (1'b1),
+            .REGCEB         (1'b1),
+            .RSTRAMARSTRAM  (1'b0),
+            .RSTRAMB        (1'b0),
+            .RSTREGARSTREG  (1'b0),
+            .RSTREGB        (1'b0),
+            .ADDRARDADDR    ({2'b00, row_a, 4'b0000}),
+            .ADDRBWRADDR    ({2'b00, b_adr[9:2], 4'b0000}),
+            .DIADI          (w_dat[15:0]),
+            .DIBDI          (16'd0),
+            .DIPADIP        (2'b00),
+            .DIPBDIP        (2'b00),
+            .WEA            ({a_we[4 * k + 2], a_we[4 * k + 3]}),
+            .WEBWE          (4'b0000),
+            .DOADO          (r_dat[15:0]),
+            .DOBDO          (qb[k][15:0]),
+            .DOPADOP        (),
+            .DOPBDOP        ()
         );
     end endgenerate
 `endif

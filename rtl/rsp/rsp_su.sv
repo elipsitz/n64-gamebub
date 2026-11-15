@@ -265,8 +265,8 @@ wire  [31:0] c_ins_d = pair_d ? v_ins_d : ins_d;                // the coprocess
 wire         pair_go = pair_d && !stall_e;
 
 // ---- the register file: two copies, read with the instruction arriving in D
-logic [31:0] rf_a [0:31];
-logic [31:0] rf_b [0:31];
+(* ram_style = "distributed" *) logic [31:0] rf_a [0:31];
+(* ram_style = "distributed" *) logic [31:0] rf_b [0:31];
 logic [31:0] rf_qa, rf_qb;
 wire  [4:0]  ra_d = stall_e ? e_ins[25:21] : s_ins_d[25:21];
 wire  [4:0]  rb_d = stall_e ? e_ins[20:16] : s_ins_d[20:16];

@@ -45,9 +45,9 @@ module rdp_tmem #(
     assign qh_b = lane_b ? b3 : b2;
 endmodule
 
-// A 16-bit memory in M10K's true dual port mode: port A writes or reads,
+// A 16-bit memory in BRAM true dual port mode: port A writes or reads,
 // port B reads; the data one cycle after the address. What port A reads in
-// the clock it writes is never used (no_rw_check)
+// the clock it writes is never used.
 module rdp_tdpram #(
     parameter AW = 9
 ) (
@@ -59,7 +59,7 @@ module rdp_tdpram #(
     input  wire [AW-1:0] addr_b,
     output reg  [15:0]   q_b
 );
-    (* ramstyle = "M10K, no_rw_check" *) reg [15:0] mem [0:(1<<AW)-1];
+    (* ram_style = "block" *) reg [15:0] mem [0:(1<<AW)-1];
     always @(posedge clk) begin
         if (we) mem[addr_a] <= wdata;
         q_a <= mem[addr_a];

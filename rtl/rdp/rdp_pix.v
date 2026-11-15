@@ -407,7 +407,7 @@ module rdp_pix (
     wire [17:0] depth_c = (z_src_p || !p_zbuf) ? {prim_z, 2'b00} : dz;
     reg  [3:0]  sb_wa;
     wire [3:0]  sb_ra = sb_wa - (lod_on ? (lod_lft ? 4'd14 : 4'd13) : 4'd9);
-    (* ramstyle = "M10K, no_rw_check" *) reg [71:0] sb_ram [0:15];
+    (* ram_style = "block" *) reg [71:0] sb_ram [0:15];
     reg  [71:0] sb_q;
     always @(posedge clk) begin
         sb_ram[sb_wa] <= {hp0, x0, bs0, shade0, depth_c, cvg0, y0};
@@ -582,7 +582,7 @@ module rdp_pix (
     reg         oob4;               // ... out of range (n64_div)
     reg  [3:0]  rw_a;               // st_ram's, sb_ram's and lf_ram's write address: every clock
     reg  [31:0] st_q;
-    (* ramstyle = "M10K, no_rw_check" *) reg [31:0] st_ram [0:15];
+    (* ram_style = "block" *) reg [31:0] st_ram [0:15];
     wire        l3_v;
     // (P4 loads a pixel's first pass at D, its second at D + 1: read at D - 2 and D - 1, the second in L3's clock)
     wire [3:0]  st_ra = rw_a - (lod_lft ? 4'd4 : 4'd3) - {3'd0, l3_v};
@@ -952,7 +952,7 @@ module rdp_pix (
     reg  [3:0]  hk9, hk10a, hzk9, hzk10a;
     reg        v9;
     reg [9:0]  x9;
-    (* altera_attribute = "-name AUTO_SHIFT_REGISTER_RECOGNITION OFF" *) reg [31:0] tex9;
+    (* shreg_extract = "no" *) reg [31:0] tex9;
     reg [35:0] shade9;
     reg [17:0] depth9;
     always @(posedge clk) begin
@@ -972,7 +972,7 @@ module rdp_pix (
     // the LOD fraction, from L3 (lf) to P9 and on to P10 for the second cycle: a RAM read 6 clocks after its write (the
     // first pass at P5 to P9; lf holds for both passes)
     reg  [8:0]  lf_q, lf9, lf10a, lf10;
-    (* ramstyle = "M10K, no_rw_check" *) reg [8:0] lf_ram [0:15];
+    (* ram_style = "block" *) reg [8:0] lf_ram [0:15];
     always @(posedge clk) begin
         lf_ram[rw_a] <= lf;
         lf_q <= lf_ram[rw_a - 4'd5];
@@ -1690,14 +1690,13 @@ endmodule
 
 // The console's reciprocal for the perspective divide (lang/c/rdp/rdp.c n64_div, its two 64-entry tables): the point
 // (15 bits) and the slope's low 10 bits (its upper ones are all ones). In logic, a LUT for each bit of the 25 (as a
-// ROM block its read is on P2's path, and it takes an M10K).
-(* altera_attribute = "-name AUTO_ROM_RECOGNITION OFF" *)
+// ROM block its read is on P2's path, and it would take a block RAM).
 module rdp_div_rom (
     input  wire [5:0]  idx,
     output wire [14:0] point,
     output wire [9:0]  slope
 );
-    (* romstyle = "logic" *) reg [24:0] e;
+    (* rom_style = "distributed" *) reg [24:0] e;
     always @(*) begin
         case (idx)
             6'd0: e = {15'h4000, 10'h303};

@@ -89,8 +89,8 @@ module rdp_top (
     // rdp_pix's P5 (tl_ra): the primitive's when nothing draws (the loads').
     //   tl_attr: {fmt 3, size 2, pal 4, line 9, tmem 9, cs, ms, ct, mt, masks 4, shifts 4, maskt 4, shiftt 4}
     //   tl_size: {uls 12, ult 12, lrs 12, lrt 12}
-    (* ramstyle = "M10K, no_rw_check" *) reg [46:0] tl_attr [0:7];
-    (* ramstyle = "M10K, no_rw_check" *) reg [47:0] tl_size [0:7];
+    (* ram_style = "block" *) reg [46:0] tl_attr [0:7];
+    (* ram_style = "block" *) reg [47:0] tl_size [0:7];
     integer ti;
     initial for (ti = 0; ti < 8; ti = ti + 1) begin tl_attr[ti] = 47'd0; tl_size[ti] = 48'd0; end
 
@@ -153,11 +153,11 @@ module rdp_top (
     // step): LUT RAM, one read and one write a clock -- as flip-flops their
     // read muxes, write muxes and eight row-step adders cost ~ALMs
     reg [31:0] adx [0:7];
-    (* ramstyle = "MLAB, no_rw_check" *) reg [31:0] e_ram [0:7];
+    (* ram_style = "distributed" *) reg [31:0] e_ram [0:7];
     // ade_ram's rows 8..15 hold a copy of adx[] (DaDx), for the span setup's
     // products: read there, they keep an 8-way choice of adx out of the shared
-    // multiplier's operand select. The MLAB is 32 rows deep: they cost nothing
-    (* ramstyle = "MLAB, no_rw_check" *) reg [31:0] ade_ram [0:15];
+    // multiplier's operand select. The LUTRAM is 16-32 rows deep: they cost nothing
+    (* ram_style = "distributed" *) reg [31:0] ade_ram [0:15];
     // (a texrect's second 64-bit word, S T / DsDx DtDy, lands in t_xl, t_dxl)
 
     function automatic [5:0] cmd_len;        // in 32-bit words, from the first word
@@ -726,7 +726,7 @@ module rdp_top (
     always @(posedge clk) if (wk == W_SUB && !aa_j[2] && aa_j[1:0] == (aa_ld3 ? 2'd3 : 2'd0)) begin
         unscrx <= ax_h[27:16]; xfrac <= ax_h[15:8];
     end
-    (* ramstyle = "MLAB, no_rw_check" *) reg [31:0] dif_ram [0:7];
+    (* ram_style = "distributed" *) reg [31:0] dif_ram [0:7];
     reg  [15:0] vgy_hi;
     wire        dz_s = vs == 4'd15 && vz;            // (Z's own step: its DaDy is zdy; at step 0 of vi = 7 it is W's that arrives)
     wire [31:0] dy_c = dz_s ? zdy : {vgy_hi, vi[0] ? vr_q[31:16] : vr_q[15:0]};
@@ -745,7 +745,7 @@ module rdp_top (
     wire [31:0] dif_q = dif_ram[ea];
     reg  signed [23:0] pf_a;
     reg  signed [8:0]  pf_b;
-    (* multstyle = "dsp" *) reg signed [32:0] pf_p;
+    (* use_dsp = "yes" *) reg signed [32:0] pf_p;
     reg  [31:0] s1r, p_d;
     always @(posedge clk) begin
         pf_a <= (cyc == 2'd2 || !attr_on(tflags, mi[2:0])) ? 24'sd0 : $signed({ade_q[31:9], 1'b0});
