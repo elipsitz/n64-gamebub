@@ -1,0 +1,10 @@
+Game Bub Nintendo 64 FPGA Core
+Copyright 2026 Game Bub Contributors
+
+This product includes RTL, firmware (`n64rt`), and tools adapted from MIRLO64:
+  https://github.com/tortugaveloz/MIRLO64
+  Copyright tortugaveloz and MIRLO64 contributors
+  Licensed under the Apache License, Version 2.0.
+
+This product builds against the Game Bub FPGA Core Framework (submodule `framework/`):
+  https://github.com/gamebub/framework
