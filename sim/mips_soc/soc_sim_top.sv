@@ -1,0 +1,269 @@
+// mirlo_mips for tb_soc.cpp: the SDRAM's DQ split for the chip model, the
+// Pocket's side as inputs, a few internals out for the bench.
+`default_nettype none
+module soc_sim_top (
+    input  wire         clk_sys, clk_sys2x, clk_vid, reset,
+    input  wire         clk_cpu,
+    input  wire         host_reset_n, host_loaded,
+    input  wire  [31:0] file_size,
+    output wire         file_size_wr,       // the program sets the selected slot's size (what the Pocket writes back)
+    output wire  [31:0] file_size_new,
+    input  wire         br_complete,
+    input  wire   [2:0] br_result,          // the last command's result code (the Pocket's target commands the bench models: tb_soc.cpp, POCKET_FS)
+    output wire         br_req_getfile, br_req_openfile, br_req_write,
+    input  wire         ss_save_t, ss_load_t,   // the Pocket's save states (SS_SAVE, SS_LOAD): a request is a turn of one
+    output wire         ss_done_t, ss_err, ss_sup,
+    output wire         br_req_read,
+    output wire  [15:0] br_slot,
+    output wire  [31:0] br_offset, br_length, br_addr,
+    input  wire  [31:0] cont1_key, cont2_key, cont3_key, cont4_key,     // the dock's pads: KEY_TYPE in [31:28] (0: none)
+    input  wire  [31:0] cont1_joy, cont2_joy, cont3_joy, cont4_joy,
+    input  wire   [4:0] ia_address,         // the Pocket's interact bus (the core's settings: interact.json), INTERACT=<address>:<value>
+    input  wire  [31:0] ia_data,
+    input  wire         ia_wr,
+    output wire  [12:0] sdram_a,
+    output wire  [1:0]  sdram_ba, sdram_dm,
+    output wire         sdram_ras_n, sdram_cas_n, sdram_we_n, sdram_cke,
+    output wire  [15:0] dq_out,
+    output wire         dq_oe,
+    input  wire  [15:0] dq_in,
+    output wire  [7:0]  vga_r, vga_b,
+    output wire  [7:0]  vga_g,
+    output wire         vga_de, vga_hsync, vga_vsync, vga_skip,
+    output wire  [11:0] fb_width,
+    output wire         fb_tall,
+    output wire  [31:0] vi_dbg0, vi_dbg1,   // (VGAT) the VI's: {hs_zero, black, mon_vi, tv_pal, vs_set, vs_pal, origin}; {thr, WIDTH}
+    output wire  [7:0]  fb_y0,
+    output wire  [8:0]  fb_rows,
+    output wire  [9:0]  fb_px0, fb_pw,
+    output wire  [10:0] fb_xs, fb_ys, fb_nw,
+    output wire         boot_ready,
+    output wire         uart_we,
+    output wire  [7:0]  uart_byte,
+    output wire  [31:0] cpu_pc, cpu_cause, cpu_epc, geom_pc, geom_msg, fb_base, rdp_sync, audio_pc, audio_state,
+    output wire         fb_mode, fb_on, fb_gamma, vblank, audio_wr,
+    // (RSPSTAT) the RSP this cycle: 0 running, 1 a DMA under way, 2 its request
+    // not taken, 3 an instruction leaves E, 4 a command run waits for the one
+    // being fetched, 5 commands being fetched or drawn
+    output wire  [5:0]  rsp_stat,
+    output wire  [7:0]  rsp_sig,            // SP_STATUS's signals (libultra: 0 yield asked, 1 yielded, 2 task done)
+    // (MEMSTAT) the SDRAM this cycle: [5:0] the port whose request was taken
+    // (0 scan-out, 1 CPU, 2 RDP, 3 RSP DMA, 4 bridge, 5 command fetch), [8:6]
+    // the controller's command {ras_n, cas_n, we_n} and [10:9] its bank, [11]
+    // its request taken, [12] a request at it, [13] a port asking, [14] the
+    // RDP at work, [15] the RSP running
+    output wire  [15:0] mem_stat,
+    output wire  [5:0]  mem_hidden, mem_save,
+    output wire [31:0] diag_vi, diag_vid_addr, diag_vid_data,
+    output wire [7:0] diag_vid_flags, diag_vid_tag,
+    output wire [31:0] diag_line, diag_flow,
+    output wire         mem_hit,        // (the controller's request is of an open row)
+    // (CPUSTAT) the game CPU this cycle of its clock: [0] an instruction
+    // retires, [1] M waits, [4:2] M's slow-path state, [7:5] F's state, [8] F
+    // has an instruction, [9] D waits (a hazard), [10] the FPU at work, [11]
+    // a multiply or divide, [12] a store at M with the write buffer full,
+    // [13] a flush, [16:14] the memory port's state, [17] D holds an instruction
+    output wire  [17:0] cpu_stat,
+    // (CPUTRACE) what the game CPU retires this cycle of its clock, and an exception it takes
+    output wire         tr_retire, tr_wr, tr_exc,
+    output wire  [31:0] tr_pc, tr_insn, tr_val, tr_exc_pc,
+    output wire  [4:0]  tr_rd, tr_exc_code,
+    output wire  [31:0] audio_out,
+    output wire         x_req, x_we, x_ack,
+    output wire  [31:0] x_addr, x_rdata, x_wdata,
+    // the Pocket's bridge as the SoC sees it (apf_wishbone_master's word
+    // addresses): the bench's Pocket writes a game file and the slots through
+    // it, and reads the nonvolatile ones back
+    input  wire         wbm_cyc, wbm_we,
+    input  wire  [29:0] wbm_adr,
+    input  wire  [31:0] wbm_dat_w,
+    output wire         wbm_ack,
+    output wire  [31:0] wbm_dat_r,
+    // the PSRAMs' pads as the PHY's registers hold them (the chips' model is the bench's)
+    output wire  [5:0]  ps_a,
+    output wire  [31:0] ps_dq_out,
+    output wire         ps_dq_oe, ps_adv_n, ps_oe_n, ps_we_n, ps_cre, ps_clk_en,
+    output wire  [1:0]  ps_ce_n,
+    output wire  [3:0]  ps_bm_n,
+    input  wire  [31:0] ps_dq_in,
+    output wire         ps_ready
+);
+wire [15:0] dq;
+wire [15:0] c0dq, c1dq;
+wire c0clk, c1clk;
+// the Pocket's cartridge port (MIRLO_GB_CART: a Game Boy cartridge on it, +gbcart=<rom>)
+wire        gb_on, gb_a_dir, gb_a_oe, gb_d_dir, gb_d_oe, gb_phi, gb_wr_n, gb_rd_n, gb_cs_n;
+wire [15:0] gb_a;
+wire [7:0]  gb_d_o, gb_d_i;
+wire        an_own;
+wire  [2:0] an_mode;
+logic       an_own_d = 1'b0;
+always @(posedge clk_sys) begin     // (the runtime's decision about the cartridge slot: docs/analogizer.md)
+    an_own_d <= an_own;
+    if (an_own != an_own_d) $display("ANALOGIZER: the adapter %s the port (video mode %0d)", an_own ? "owns" : "released", an_mode);
+end
+gb_cart_model gbcart (.clk(clk_sys), .res_n(gb_on), .a_dir(gb_a_dir), .a_oe(gb_a_oe), .a(gb_a), .d_dir(gb_d_dir),
+    .d_oe(gb_d_oe), .d_o(gb_d_o), .d_i(gb_d_i), .phi(gb_phi), .wr_n(gb_wr_n), .rd_n(gb_rd_n), .cs_n(gb_cs_n));
+// the SNAC port's four Joybus wires (rtl/analogizer/an_snac_pif.sv), each with a device (sim/analogizer/snac/jb_dev.sv) set by plusargs:
+//   +snac<n>=<kind>  (n 0..3 the port: 1 the first; kind 0 nothing, 1 controller, 2 controller with a pak, 3 short replies, 4 wire held low,
+//   5 talkative, 6 noisy), +snac<n>_btn=, +snac<n>_stick= (the controller's two words, decimal), +snac<n>_delay= (us), +snac<n>_cell= (ns)
+wire        sn_en, sn_p30_dir, sn_p30_oe, sn_p31_dir, sn_p31_oe, sn_b0_dir, sn_b0_oe;
+wire  [3:0] sn_b0_o, sn_mlow, sn_dlow, sn_wire;
+reg   [15:0] snk_kind = 16'd0;
+reg   [63:0] snk_cell = {4{16'd4000}}, snk_delay = {4{16'd3}}, snk_btn = 64'd0, snk_stick = 64'd0;
+integer      sn_v;
+initial begin
+    if ($value$plusargs("snac0=%d", sn_v)) snk_kind[3:0] = sn_v[3:0];
+    if ($value$plusargs("snac1=%d", sn_v)) snk_kind[7:4] = sn_v[3:0];
+    if ($value$plusargs("snac2=%d", sn_v)) snk_kind[11:8] = sn_v[3:0];
+    if ($value$plusargs("snac3=%d", sn_v)) snk_kind[15:12] = sn_v[3:0];
+    if ($value$plusargs("snac0_btn=%d", sn_v)) snk_btn[15:0] = sn_v[15:0];
+    if ($value$plusargs("snac1_btn=%d", sn_v)) snk_btn[31:16] = sn_v[15:0];
+    if ($value$plusargs("snac2_btn=%d", sn_v)) snk_btn[47:32] = sn_v[15:0];
+    if ($value$plusargs("snac3_btn=%d", sn_v)) snk_btn[63:48] = sn_v[15:0];
+    if ($value$plusargs("snac0_stick=%d", sn_v)) snk_stick[15:0] = sn_v[15:0];
+    if ($value$plusargs("snac1_stick=%d", sn_v)) snk_stick[31:16] = sn_v[15:0];
+    if ($value$plusargs("snac2_stick=%d", sn_v)) snk_stick[47:32] = sn_v[15:0];
+    if ($value$plusargs("snac3_stick=%d", sn_v)) snk_stick[63:48] = sn_v[15:0];
+    if ($value$plusargs("snac0_delay=%d", sn_v)) snk_delay[15:0] = sn_v[15:0];
+    if ($value$plusargs("snac1_delay=%d", sn_v)) snk_delay[31:16] = sn_v[15:0];
+    if ($value$plusargs("snac2_delay=%d", sn_v)) snk_delay[47:32] = sn_v[15:0];
+    if ($value$plusargs("snac3_delay=%d", sn_v)) snk_delay[63:48] = sn_v[15:0];
+    if ($value$plusargs("snac0_cell=%d", sn_v)) snk_cell[15:0] = sn_v[15:0];
+    if ($value$plusargs("snac1_cell=%d", sn_v)) snk_cell[31:16] = sn_v[15:0];
+    if ($value$plusargs("snac2_cell=%d", sn_v)) snk_cell[47:32] = sn_v[15:0];
+    if ($value$plusargs("snac3_cell=%d", sn_v)) snk_cell[63:48] = sn_v[15:0];
+end
+assign sn_mlow[0] = sn_en & sn_p30_dir & sn_p30_oe;
+assign sn_mlow[1] = sn_en & sn_p31_dir & sn_p31_oe;
+assign sn_mlow[2] = sn_en & sn_b0_dir & sn_b0_oe & ~sn_b0_o[0];
+assign sn_mlow[3] = sn_en & sn_b0_dir & sn_b0_oe & ~sn_b0_o[3];
+assign sn_wire = ~(sn_mlow | sn_dlow);
+for (genvar snp = 0; snp < 4; snp = snp + 1) begin : sndev
+    wire [31:0] nc, nw; wire [15:0] la; wire [7:0] lc;
+    jb_dev d (.clk(clk_sys), .line(sn_wire[snp]), .low(sn_dlow[snp]), .kind(snk_kind[4*snp +: 4]), .cell_ns(snk_cell[16*snp +: 16]),
+              .delay_us(snk_delay[16*snp +: 16]), .btn(snk_btn[16*snp +: 16]), .stick(snk_stick[16*snp +: 16]),
+              .n_cmds(nc), .n_wr(nw), .last_wr_addr(la), .last_cmd(lc));
+end
+// (a 1 driven on a bank 0 bit against a device that pulls that wire low is a fault of the port mux)
+// ... nor any Joybus pin driven (translator outward or driver on) while the adapter does not own the port: a cartridge's /WR, /RD, /CS and /RES are there
+always @(posedge clk_sys) if (!an_own && (sn_p30_dir | sn_p30_oe | sn_p31_dir | sn_p31_oe | sn_b0_dir | sn_b0_oe)) $display("SNAC: a Joybus pin driven while the adapter does not own the port");
+always @(posedge clk_sys) begin
+    if (sn_en & sn_b0_dir & sn_b0_oe & sn_b0_o[0] & sn_dlow[2]) $display("SNAC: bank 0 drove port 3 high against its device");
+    if (sn_en & sn_b0_dir & sn_b0_oe & sn_b0_o[3] & sn_dlow[3]) $display("SNAC: bank 0 drove port 4 high against its device");
+end
+// the APF audio FIFO (core_top's): its fill, flushed, drained at 48 kHz while playing
+logic [11:0] aud_fill = 0;
+logic [10:0] aud_div = 0;
+wire         aud_flush, aud_play;
+always_ff @(posedge clk_sys) begin
+    aud_div <= aud_div == 11'd1308 ? 11'd0 : aud_div + 11'd1;          // 62.832 MHz / 48 kHz
+    if (aud_flush) aud_fill <= 0;
+    else aud_fill <= aud_fill + {11'd0, audio_wr && aud_fill != 12'hFFF} - {11'd0, aud_play && aud_div == 0 && aud_fill != 0};
+end
+// the pads: the bench's values are written into the pad RAM one word at a time, round and round (the Pocket's io_pad_controller
+// writes them as they arrive; the triggers are 0)
+logic [3:0]  pad_i = 4'd0;
+always_ff @(posedge clk_sys) pad_i <= pad_i + 4'd1;
+logic [31:0] pad_w;
+always_comb case (pad_i[3:2])
+    2'd0: pad_w = pad_i[1:0] == 2'd0 ? cont1_key : pad_i[1:0] == 2'd1 ? cont2_key : pad_i[1:0] == 2'd2 ? cont3_key : cont4_key;
+    2'd1: pad_w = pad_i[1:0] == 2'd0 ? cont1_joy : pad_i[1:0] == 2'd1 ? cont2_joy : pad_i[1:0] == 2'd2 ? cont3_joy : cont4_joy;
+    default: pad_w = 32'd0;
+endcase
+mirlo_mips #(.SDR_T_INIT(100)) soc (
+    .altera_reserved_tck(1'b0), .altera_reserved_tdi(1'b0), .altera_reserved_tdo(), .altera_reserved_tms(1'b0),
+    .apf_audio_buffer_fill(aud_fill), .apf_audio_bus_out(audio_out), .apf_audio_bus_wr(audio_wr), .apf_audio_flush(aud_flush),
+    .apf_audio_playback_en(aud_play),
+    .apf_bridge_boot_ready(boot_ready), .apf_bridge_command_result_code(br_result), .apf_bridge_complete_trigger(br_complete),
+    .apf_bridge_current_address(32'd0), .apf_bridge_data_offset(br_offset), .apf_bridge_file_size(file_size),
+    .apf_bridge_file_size_wr(file_size_wr), .apf_bridge_host_loaded(host_loaded), .apf_bridge_host_reset_n(host_reset_n),
+    .apf_bridge_length(br_length), .apf_bridge_new_file_size_data(file_size_new), .apf_bridge_ram_data_address(br_addr),
+    .apf_bridge_request_getfile(br_req_getfile), .apf_bridge_request_openfile(br_req_openfile), .apf_bridge_request_read(br_req_read), .apf_bridge_request_write(br_req_write),
+    .apf_bridge_slot_id(br_slot), .apf_id_chip_id(64'd0),
+    .apf_ss_save_t(ss_save_t), .apf_ss_load_t(ss_load_t), .apf_ss_done_t(ss_done_t), .apf_ss_err(ss_err), .apf_ss_sup(ss_sup),
+    .apf_pad_clk(clk_sys), .apf_pad_we(1'b1), .apf_pad_wa(pad_i), .apf_pad_wd(pad_w),
+    .apf_interact_address(ia_address), .apf_interact_data(ia_data), .apf_interact_q(), .apf_interact_wr(ia_wr),
+    .apf_rtc_date_bcd(32'd0), .apf_rtc_time_bcd(32'd0), .apf_rtc_unix_seconds(32'd0),
+    .clk_sys, .clk_sys2x, .clk_sys2x_90deg(clk_sys2x), .clk_vid, .reset,
+    .clk_cpu,
+    .sdram_a, .sdram_ba, .sdram_cas_n, .sdram_cke, .sdram_clock(), .sdram_dm, .sdram_dq(dq), .sdram_ras_n, .sdram_we_n,
+    .cram0_a(), .cram1_a(), .cram0_dq(c0dq), .cram1_dq(c1dq),
+    .cram0_clk(c0clk), .cram1_clk(c1clk), .cram0_adv_n(), .cram1_adv_n(), .cram0_cre(), .cram1_cre(),
+    .cram0_ce0_n(), .cram0_ce1_n(), .cram1_ce0_n(), .cram1_ce1_n(),
+    .cram0_oe_n(), .cram1_oe_n(), .cram0_we_n(), .cram1_we_n(), .cram0_ub_n(), .cram0_lb_n(), .cram1_ub_n(), .cram1_lb_n(),
+    .serial_rx(1'b1), .serial_tx(), .use_jtag(1'b0),
+    .gb_on, .gb_a_dir, .gb_a_oe, .gb_a, .gb_d_o, .gb_d_dir, .gb_d_oe, .gb_d_i, .gb_phi, .gb_wr_n, .gb_rd_n, .gb_cs_n,
+    .sn_en, .sn_p30_dir, .sn_p30_oe, .sn_p31_dir, .sn_p31_oe, .sn_b0_dir, .sn_b0_oe, .sn_b0_o, .sn_dq(sn_wire),
+    .vga_b, .vga_de, .vga_g, .vga_hsync, .vga_r, .vga_skip, .vga_vsync, .vga_woven(), .an_mode(an_mode), .an_scan(), .an_own(an_own),
+    .wishbone_ack(1'b0), .wishbone_adr(), .wishbone_bte(), .wishbone_cti(), .wishbone_cyc(), .wishbone_dat_r(32'd0),
+    .wishbone_dat_w(), .wishbone_err(1'b0),
+    .wishbone_master_ack(wbm_ack), .wishbone_master_adr(wbm_adr), .wishbone_master_bte(2'd0), .wishbone_master_cti(3'd0),
+    .wishbone_master_cyc(wbm_cyc), .wishbone_master_pending(wbm_cyc), .wishbone_master_dat_r(wbm_dat_r), .wishbone_master_dat_w(wbm_dat_w), .wishbone_master_err(),
+    .wishbone_master_sel(4'hF), .wishbone_master_stb(wbm_cyc), .wishbone_master_we(wbm_we),
+    .wishbone_sel(), .wishbone_stb(), .wishbone_we()
+);
+assign c0dq = soc.ps_o_dq_oe ? 16'bz : ps_dq_in[31:16];
+assign c1dq = soc.ps_o_dq_oe ? 16'bz : ps_dq_in[15:0];
+assign ps_a = soc.ps_o_a;           assign ps_dq_out = soc.ps_o_dq;   assign ps_dq_oe = soc.ps_o_dq_oe;
+assign ps_adv_n = soc.ps_o_adv_n;   assign ps_oe_n = soc.ps_o_oe_n;   assign ps_we_n = soc.ps_o_we_n;
+assign ps_cre = soc.ps_o_cre;       assign ps_clk_en = c0clk & c1clk;       // (the pins: the bench looks at them each quarter it steps in)
+assign ps_ce_n = soc.ps_o_ce_n;     assign ps_bm_n = soc.ps_o_bm_n;
+assign ps_ready = soc.ps_ready;
+assign dq_oe  = soc.phy.oe_reg;
+assign dq_out = soc.phy.out_reg;
+assign dq = dq_oe ? 16'bz : dq_in;
+assign uart_we   = soc.r_uart_we;
+assign uart_byte = soc.r_uart_byte;
+assign cpu_pc    = soc.sys.cpu.f_pc;
+assign cpu_cause = soc.dbg_cause;
+assign cpu_epc   = soc.dbg_epc;
+assign geom_pc   = soc.dbg_geom_pc;
+assign geom_msg  = soc.dbg_geom_msg;
+assign fb_base   = soc.fb_base;
+assign fb_mode   = soc.fb_mode;
+assign fb_on     = soc.fb_en;    // (off: the picture is black)
+assign fb_width  = soc.fb_width;
+assign fb_tall   = soc.fb_tall;
+assign vi_dbg0   = {soc.vi.hs_zero, soc.vi.black, soc.mon_vi, soc.tv_pal, soc.vi.vs_set, soc.vi.vs_pal, 3'd0, soc.vi.org_b};
+assign vi_dbg1   = {3'd0, soc.vi_thr, soc.vi.wid};
+assign fb_px0    = soc.fb_px0; assign fb_pw = soc.fb_pw; assign fb_xs = soc.fb_xs; assign fb_ys = soc.fb_ys; assign fb_nw = soc.fb_nw;
+assign fb_y0     = soc.fb_y0;
+assign fb_rows   = soc.fb_rows;
+assign fb_gamma  = soc.fb_gamma;                              // (the scan-out's gamma correction is on)
+for (genvar mem_i = 0; mem_i < 6; mem_i = mem_i + 1) begin
+    assign mem_hidden[mem_i] = soc.p_valid[mem_i] && soc.p_ready[mem_i] && soc.p_addr[mem_i][23:18] == 6'h37;
+    assign mem_save[mem_i] = soc.p_valid[mem_i] && soc.p_ready[mem_i] && soc.p_addr[mem_i][23:18] == 6'h33;
+end
+assign diag_flow = {6'd0, soc.video.drop, soc.video.tq_n,
+                    soc.video.all, soc.video.room, soc.video.running, soc.video.fb_sys,
+                    2'd0, soc.video.h_next};
+assign diag_line = {soc.video.hid_f, soc.video.f_empty, soc.video.f_q[36], soc.video.stale,
+                    soc.video.wlevel[13:0], soc.video.vcount[9:0], 4'd0};
+assign diag_vid_tag = {3'd0, soc.video.tq_h};
+assign diag_vid_addr = {8'd0,soc.p_addr[0]};
+assign diag_vid_data = soc.p_rdata;
+assign diag_vid_flags = {soc.video.hid_f, soc.video.h_next, soc.p_valid[0], soc.p_ready[0], soc.p_rvalid[0], 1'b0, soc.p_rvalid[0], soc.video.fb_sys};
+assign diag_vi = {20'd0, soc.video.hid_f, soc.vi_aa, soc.mon_vi, soc.fb_en,
+                  soc.video.running, soc.video.h_next, soc.p_valid[0], soc.p_ready[0],
+                  soc.p_rvalid[0], soc.video.hires, soc.video.px32_n, soc.video.all};
+assign mem_hit   = soc.sdram.open[soc.sdram.q_bank] && soc.sdram.row[soc.sdram.q_bank] == soc.sdram.q_row;
+assign mem_stat  = {!soc.rsp_halted, soc.cmd_valid || !soc.rdp_idle, |soc.p_valid, soc.sdram.req_valid, soc.sdram.req_ready,
+                    soc.sdram.cmd_ba, soc.sdram.cmd, 6'(soc.p_valid & soc.p_ready)};
+assign rsp_sig   = soc.rsp.st_sig;
+assign rsp_stat  = {soc.dpc_status[3], soc.dpc.end_valid, soc.rsp.tr_e, soc.rsp_r_valid && !soc.p_ready[3],
+                    soc.rsp.ds != 0, !soc.rsp_halted};
+assign cpu_stat  = {soc.sys.cpu.d_valid, 3'(soc.sys.cpu.port), soc.sys.cpu.flush, soc.sys.cpu.m_live && soc.sys.cpu.m_st && soc.sys.cpu.wb_full,
+                    soc.sys.cpu.md_busy, soc.sys.cpu.fpu_busy, soc.sys.cpu.d_stall, soc.sys.cpu.f_have, 3'(soc.sys.cpu.fs), 3'(soc.sys.cpu.ms),
+                    soc.sys.cpu.m_stall, soc.sys.cpu.w_valid};
+assign tr_retire = soc.sys.cpu.tr_retire; assign tr_wr = soc.sys.cpu.tr_wr; assign tr_exc = soc.sys.cpu.tr_exc;
+assign tr_pc = soc.sys.cpu.tr_pc; assign tr_insn = soc.sys.cpu.tr_insn; assign tr_val = soc.sys.cpu.tr_val[31:0];
+assign tr_rd = soc.sys.cpu.tr_rd; assign tr_exc_pc = soc.sys.cpu.tr_exc_pc; assign tr_exc_code = soc.sys.cpu.tr_exc_code;
+assign vblank    = soc.vblank;
+assign rdp_sync = soc.rdp_sync;
+assign audio_pc  = soc.dbg_aud_pc;
+assign x_req = soc.x_req; assign x_we = soc.x_we; assign x_ack = soc.x_ack;
+assign x_addr = soc.x_addr; assign x_rdata = soc.x_rdata; assign x_wdata = soc.x_wdata;
+assign audio_state = soc.dbg_aud_state;
+endmodule
+`default_nettype wire

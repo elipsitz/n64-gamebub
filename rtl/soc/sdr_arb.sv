@@ -1,0 +1,130 @@
+// N requesters onto one sdr_ctrl. Round-robin; a grant is kept while its
+// port goes on asking, up to MAXB words (a line read, a burst: row hits), and
+// an `urgent` port (the SoC's: the CPU and the RSP's DMA, which wait for each
+// word they ask for, and the scan-out while its FIFO is low) goes first,
+// round-robin among the urgent ones -- bounded
+// by what it asks for, so it cannot starve anyone for long. The chosen request
+// is registered before it reaches the controller.
+//
+// `la_*`: the request of the port that is next after the one being served
+// (registered: a cycle old). The controller opens its row meanwhile, where
+// that costs the one being served nothing.
+//
+// Read data comes back to every port with rd_valid[i] for the one that asked,
+// in the order each port asked.
+`default_nettype none
+
+module sdr_arb #(
+    parameter int N    = 5,
+    parameter int MAXB = 16,
+    parameter bit APF_PREEMPT = 0
+) (
+    input  wire              clk,
+    input  wire              rst,
+    input  wire  [N-1:0]     p_valid,
+    input  wire  [N-1:0]     p_we,
+    input  wire  [N-1:0][23:0] p_addr,
+    input  wire  [N-1:0][31:0] p_wdata,
+    input  wire  [N-1:0][3:0]  p_be,
+    input  wire  [N-1:0]     p_urgent,
+    input  wire              apf_force,
+    output logic [N-1:0]     p_ready,
+    output logic [N-1:0]     p_rvalid,
+    output logic [31:0]      p_rdata,
+    // to sdr_ctrl
+    output logic             req_valid,
+    output logic             req_we,
+    output logic [23:0]      req_addr,
+    output logic [31:0]      req_wdata,
+    output logic [3:0]       req_be,
+    output logic [2:0]       req_tag,
+    input  wire              req_ready,
+    output logic             la_valid,
+    output logic [23:0]      la_addr,
+    input  wire              rd_valid,
+    input  wire  [31:0]      rd_data,
+    input  wire  [2:0]       rd_tag
+);
+
+// The RDP's hidden plane (the words 0xDC_0000 to 0xDF_FFFF) is placed in the banks so that the hidden words of a row of an
+// image are never in that row's own bank: an image's row at byte address A is in bank A[12:11], and its hidden word, number
+// A[22:5] of the plane, has A[12:11] as its bits [7:6]. Those two bits, taken to the bank (xor 2: two banks on), and the
+// plane's bits [10:9], which were the bank, put in their place. A bijection on the plane, so that all that reads or writes the
+// plane (the RDP, the scan-out, the CPU) goes on seeing the one linear plane; a span of a row's colour (or depth) words and
+// its hidden words, which the RDP reads and writes by turns, no longer close each other's row at every change. (Done on each
+// port's address, ahead of the choice of the port.)
+function automatic logic [23:0] hmap(input logic [23:0] a);
+    return (a[23:18] == 6'b110111) ? {a[23:11], a[7:6] ^ 2'b10, a[8], a[10:9], a[5:0]} : a;
+endfunction
+logic [N-1:0][23:0] p_phys;
+always_comb for (int i = 0; i < N; i++) p_phys[i] = hmap(p_addr[i]);
+
+localparam int IW = $clog2(N);
+logic [IW-1:0] cur;             // the port holding the grant
+logic          held;            // cur keeps it (it asked last cycle and got served)
+logic [4:0]    beats;
+
+// the first port of v round the ring from cur + 1 (cur itself the last): {found, the port; cur when none}.
+// Prefer requesters after cur; if none are there, wrap to the start of the ring.
+function automatic logic [IW:0] ring(input logic [N-1:0] v, input logic [IW-1:0] c);
+    logic f; logic [IW-1:0] p; logic [N-1:0] after_cur, candidates;
+    f = 0; p = c;
+    for (int i = 0; i < N; i++) after_cur[i] = v[i] && IW'(i) > c;
+    candidates = (|after_cur) ? after_cur : v;
+    for (int i = N - 1; i >= 0; i--) if (candidates[i]) begin p = IW'(i); f = 1; end
+    return {f, p};
+endfunction
+// the next port: cur if held and still asking, else urgent first, else round-robin after cur
+logic [IW-1:0] pick;
+logic          any;
+logic [N-1:0]  urgent_valid;
+logic [IW:0]   rn;
+always_comb begin
+    any = |p_valid;
+    urgent_valid = p_valid & p_urgent;
+    rn = ring((|urgent_valid) ? urgent_valid : p_valid, cur);
+    if (APF_PREEMPT && p_valid[4] && apf_force) pick = IW'(4);
+    else if (held && p_valid[cur] && beats < 5'(MAXB)) pick = cur;
+    else pick = rn[IW-1:0];
+end
+// the next other port: as above, cur left out
+logic [IW:0]   ro;
+logic [N-1:0]  p_oth, urgent_oth;
+always_comb begin
+    p_oth = p_valid;
+    p_oth[cur] = 0;
+    urgent_oth = p_oth & p_urgent;
+    ro = ring((|urgent_oth) ? urgent_oth : p_oth, cur);
+end
+always_ff @(posedge clk) begin
+    la_valid <= !rst && ro[IW];
+    la_addr  <= p_phys[ro[IW-1:0]];
+end
+
+// the register stage
+wire load = any && (!req_valid || req_ready);
+always_comb begin
+    p_ready = '0;
+    if (load) p_ready[pick] = 1;
+end
+always_ff @(posedge clk) begin
+    if (rst) begin req_valid <= 0; cur <= '0; held <= 0; beats <= '0; end
+    else begin
+        if (req_valid && req_ready) req_valid <= 0;
+        if (load) begin
+            req_valid <= 1; req_we <= p_we[pick]; req_addr <= p_phys[pick];
+            req_wdata <= p_wdata[pick]; req_be <= p_be[pick]; req_tag <= 3'(pick);
+            beats <= (held && pick == cur) ? beats + 5'd1 : 5'd1;
+            cur <= pick; held <= 1;
+        end else if (!p_valid[cur]) held <= 0;
+    end
+end
+
+always_comb begin
+    p_rvalid = '0;
+    if (rd_valid) p_rvalid[rd_tag[IW-1:0]] = 1;
+end
+assign p_rdata = rd_data;
+
+endmodule
+`default_nettype wire

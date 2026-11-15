@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""The scan-out's VI filters (rtl/soc/n64_video.sv, MIRLO_VI_AA) on a raw
+colour image: RGBA5551 big-endian, bit 0 the coverage's top bit, and its
+pixels' hidden two coverage bits (image.hid, a byte a pixel: rdp_task
+RDP_RAW=1). The same rules as tb_vi.cpp's model, which the RTL matches pixel
+for pixel.
+
+  vi_model.py image.raw width out.png [--divot] [--dedither] [--off] [--deblur] [--out32]
+
+--off: the picture as the scan-out shows it without the filters.
+--deblur, --out32: the core's "Picture" options (docs/video_options.md): the anti-alias and divot filters bypassed; the
+dither filter bypassed and the 16-bit picture's channels with their low three bits from the shadow plane (here a plane of zeros, which
+passes the check for the words whose CRC-3 is 0), else the top three bits again.
+"""
+import sys
+import numpy as np
+from PIL import Image
+
+
+def load(path, w):
+    a = np.frombuffer(open(path, 'rb').read(), dtype='>u2').astype(np.int32)
+    return a[: (a.size // w) * w].reshape(-1, w)
+
+
+def channels(fb):
+    return [(fb >> 11) & 31, (fb >> 6) & 31, (fb >> 1) & 31]
+
+
+def crc3(w):
+    """the shadow plane's check of a 16-bit word: CRC-3 (x^3 + x + 1), the top bit first (lang/c/rdp/rdp.c sh_crc), of an array"""
+    w = np.asarray(w, dtype=np.int64)
+    c = np.zeros_like(w)
+    for i in range(15, -1, -1):
+        fb = ((c >> 2) & 1) ^ ((w >> i) & 1)
+        c = (c << 1) & 7
+        c = np.where(fb == 1, c ^ 3, c)
+    return c
+
+
+def sh_lows(fb, sh=None):
+    """the 32-bit output's low three bits of each channel of a 16-bit picture: the shadow byte's where its check is the word's
+    (sh: the plane's bytes, default a plane of zeros, as the simulator's SDRAM; red and green keep two of the three bits, blue one, the
+    bit missing repeating the one above it), else the channel's top three bits again"""
+    if sh is None:
+        sh = np.zeros_like(fb)
+    ok = (sh & 7) == crc3(fb)
+    two_r, two_g, one_b = (sh >> 6) & 3, (sh >> 4) & 3, (sh >> 3) & 1
+    plane = [(two_r << 1) | (two_r & 1), (two_g << 1) | (two_g & 1), one_b * 7]
+    lows = []
+    for k, rs in enumerate((11, 6, 1)):
+        top = (fb >> (rs + 2)) & 7
+        lows.append(np.where(ok, plane[k], top))
+    return lows
+
+
+def filt(fb, divot, hid=None, dedither=False, deblur=False, out32=False, sh=None):
+    """R8 G8 B8 per pixel, as the pads take them"""
+    h, w = fb.shape
+    if hid is None:
+        hid = np.full(fb.shape, 3)
+    fb0 = fb                                          # (the picture as the plane's check sees it)
+    if deblur:                                        # no anti-alias, no divot: every pixel is complete
+        divot = False
+        hid = np.full(fb.shape, 3)
+        fb = fb | 1
+    if out32:
+        dedither = False
+    cvg = ((fb & 1) << 2) | hid
+    comp = cvg == 7
+    ch = channels(fb)
+    out = []
+    taps = [(-1, -1), (1, -1), (-2, 0), (2, 0), (-1, 1), (1, 1)]
+    cp_ok = np.pad(comp, 2, constant_values=False)          # off the picture: not a tap
+    lows = sh_lows(fb0, sh) if out32 else [0, 0, 0]       # (the 32-bit output: the shadow plane's low bits, in the centre of the anti-alias filter too)
+    for ci, c in enumerate(ch):
+        o = (c << 3) | lows[ci]                        # unfiltered: the N64's 5 bits << 3
+        if dedither:                                  # the ring's signs, added to the eight bits
+            add = np.zeros_like(c)
+            okp = np.pad(np.ones_like(comp), 1, constant_values=False)
+            cp1 = np.pad(c, 1)
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    nb = cp1[1 + dy:1 + dy + h, 1 + dx:1 + dx + w]
+                    ok = okp[1 + dy:1 + dy + h, 1 + dx:1 + dx + w]
+                    add += np.where(ok, np.sign(nb - c), 0)
+            o = np.minimum((c << 3) + add, 255)
+        cp = np.pad(c, 2)
+        vals = []
+        for dx, dy in taps:
+            nb = cp[2 + dy:2 + dy + h, 2 + dx:2 + dx + w]
+            ok = cp_ok[2 + dy:2 + dy + h, 2 + dx:2 + dx + w]
+            vals.append(np.where(ok, nb, c))          # not complete, or off: the centre
+        s = np.sort(np.stack(vals), axis=0)
+        mn = np.minimum(s[1], c)
+        mx = np.maximum(s[4], c)
+        o8 = ((c << 3) | lows[ci]) + (mn + mx - 2 * c) * (7 - cvg)       # the N64's ((.. + 4) >> 3 on 8 bits): exact
+        out.append(np.where(comp, o, o8))
+    if divot:
+        part = ~comp
+        anyp = part.copy()
+        anyp[:, 1:] |= part[:, :-1]
+        anyp[:, :-1] |= part[:, 1:]
+        res = []
+        for o in out:
+            l = o.copy(); l[:, 1:] = o[:, :-1]
+            r = o.copy(); r[:, :-1] = o[:, 1:]
+            med = np.median(np.stack([l, o, r]), axis=0).astype(np.int32)
+            res.append(np.where(anyp, med, o))
+        out = res
+    return out
+
+
+def to_rgb(r8, g8, b8):
+    return np.stack([r8, g8, b8], axis=-1).astype(np.uint8)
+
+
+def main():
+    path, w, outp = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+    fb = load(path, w)
+    hp = path[:-4] + '.hid'
+    import os
+    hid = np.frombuffer(open(hp, 'rb').read(), dtype=np.uint8).astype(np.int32)[: fb.size].reshape(fb.shape) if os.path.exists(hp) else None
+    if '--off' in sys.argv:
+        c = channels(fb)
+        r8, g8, b8 = [x << 3 for x in c]
+    else:
+        r8, g8, b8 = filt(fb, '--divot' in sys.argv, hid, '--dedither' in sys.argv, '--deblur' in sys.argv, '--out32' in sys.argv)
+    Image.fromarray(to_rgb(r8, g8, b8)).save(outp)
+
+
+if __name__ == '__main__':
+    main()
