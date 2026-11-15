@@ -28,7 +28,9 @@
 // its unknown-opcode count, the scan-out's unused LENGTH -- and reads as 0.
 `default_nettype none
 
-module mirlo_regs (
+module mirlo_regs #(
+    parameter bit GB_CART_PRESENT = 1'b0
+) (
     input  wire         clk,
     input  wire         rst,
     input  wire         r_req,
@@ -44,6 +46,7 @@ module mirlo_regs (
     input  wire  [11:0] aud_fill,
     // APF bridge
     output logic        br_request_read, br_request_write, br_request_getfile, br_request_openfile,
+    output logic        br_request_setsize, br_request_flush,
     output logic [15:0] br_slot_id,
     output logic [31:0] br_data_offset, br_length, br_ram_data_address,
     output logic        br_file_size_wr,
@@ -74,6 +77,7 @@ module mirlo_regs (
     output wire  [1:0]  ia_crop_l,
     output wire         ia_out32,           // interact: "Video settings" (field 17, INTERACT2[9:5]): bit 0 the 32-bit output, bit 1 Deblur (docs/video_options.md)
     output wire         ia_deblur,
+    output wire         ia_rumble,
     // video
     input  wire         vblank,             // sys: the scan-out is in vblank
     output logic [31:0] fb_base,
@@ -191,6 +195,8 @@ always_comb begin
     br_request_write    = wr && a == R_APF_BRIDGE_REQUEST_WRITE;
     br_request_getfile  = wr && a == R_APF_BRIDGE_REQUEST_GETFILE;
     br_request_openfile = wr && a == R_APF_BRIDGE_REQUEST_OPENFILE;
+    br_request_setsize  = wr && a == R_APF_BRIDGE_REQUEST_SETSIZE;
+    br_request_flush    = wr && a == R_APF_BRIDGE_REQUEST_FLUSH;
     br_file_size_wr     = wr && a == R_APF_BRIDGE_FILE_SIZE;
     br_new_file_size    = r_wdata;
 end
@@ -239,6 +245,7 @@ assign ia_crop_r = ia0[16:15];
 assign ia_crop_l = ia0[18:17];
 assign ia_out32  = ia2[5];
 assign ia_deblur = ia2[6];
+assign ia_rumble = ia2[30];
 wire [3:0] ia_an_video = ia2[3:0];
 wire       ia_an_dark  = ia_an_video >= 4'd7 && ia_an_video <= 4'd9;
 assign ia_an_mode = ia_an_dark ? 3'd6 : ia_an_video >= 4'd10 ? 3'd0 : ia_an_video[2:0];     // (a value no entry has: the DAC as with Off)
@@ -424,7 +431,7 @@ logic        f_in_ready;
 logic [11:0] f_level;
 logic [15:0] dropped;
 `ifndef CMDQ_AW
-`define CMDQ_AW 12
+`define CMDQ_AW 11
 `endif
 fifo_fwft #(.W(32), .AW(`CMDQ_AW)) cmdq (
     .clk, .rst, .in_valid(csr_push || su_valid), .in_ready(f_in_ready), .in_data(csr_push ? r_wdata : su_data),
@@ -458,7 +465,7 @@ function automatic logic [31:0] smask(input logic [15:0] ad);     // a shadowed 
     endcase
 endfunction
 wire  [7:0]  sh_a = {a[11:8], a[5:2]};
-(* ramstyle = "M10K, no_rw_check" *) logic [31:0] shadow [0:255];
+(* ram_style = "block" *) logic [31:0] shadow [0:255];
 logic [31:0] sh_q;
 initial begin
     for (int k = 0; k < 256; k++) shadow[k] = 32'd0;
@@ -474,7 +481,7 @@ always_ff @(posedge clk) begin
 end
 // APF_INPUT: the pads' words, a RAM of 16 (a word a register, at a[5:2]: KEY1..4 at 0..3, JOY1..4 at 4..7, TRIG1..4 at 8..11),
 // written by io_pad_controller.v in the Pocket's clock and read here by the same rule as the shadow's
-(* ramstyle = "M10K, no_rw_check" *) logic [31:0] pad_ram [0:15];
+(* ram_style = "distributed" *) logic [31:0] pad_ram [0:15];
 logic [31:0] pad_q;
 initial for (int k = 0; k < 16; k++) pad_ram[k] = 32'd0;
 always_ff @(posedge pad_clk) if (pad_we) pad_ram[pad_wa] <= pad_wd;
@@ -545,7 +552,7 @@ always_comb begin
     default: ;
     endcase
     case (a[5:2])                                               // GB_CART
-    R_GB_CART_ID[5:2]:                     rb[12] = 32'h4742_0001;
+    R_GB_CART_ID[5:2]:                     rb[12] = GB_CART_PRESENT ? 32'h4742_0001 : 32'd0;
     // (BUSY from the write on: the engine's own busy is a cycle behind gbc_start)
     R_GB_CART_ACCESS[5:2]:                 rb[12] = {gbc_busy || gbc_start, 23'd0, gbc_rdata};
     default: ;

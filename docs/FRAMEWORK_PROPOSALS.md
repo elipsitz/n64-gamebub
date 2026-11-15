@@ -15,14 +15,14 @@ While implementing `GameBub.N64` (`MIRLO64` on `XC7A100TCSG324-1`) against the *
 
 ---
 
-## 2. Two Small Upstream Packaging Fixes (`framework/`)
+## 2. Small Framework Enhancement Applied & Upstream Packaging Note (`framework/`)
 
-We did **not** modify `framework/` in this repository, working around both items cleanly inside `GameBub.N64`, but they are 2-line upstream improvements for all core authors:
+To keep upstream `MIRLO64` RTL unmodified wherever possible, we made **one small file-discovery enhancement** in `framework/` (on detached `HEAD`) and noted one optional Python dependency improvement for upstream:
 
-1. **Include `heatshrink2` in `pyBuildCore.pythonDeps` ([package.mill](file:///usr/local/google/home/elipsitz/Downloads/gamebub-n64/framework/package.mill#L66)):**
-   - [build_core.py](file:///usr/local/google/home/elipsitz/Downloads/gamebub-n64/framework/scripts/build_core.py#L194-L201) attempts `import heatshrink2` to emit compressed `.bit.hs` bitstreams (`window_sz2=9, lookahead_sz2=6`), silently skipping compression on `ImportError`, while `pyBuildCore.pythonDeps` currently lists only `Seq("edalize==0.6.7")`. Adding `"heatshrink2"` enables automatic `.bit.hs` generation in Mill's isolated Python venv.
-2. **Pass Verilog Include (`.vh`/`.svh`) and Memory Init (`.hex`/`.mem`) Files in `build_core.py` ([build_core.py](file:///usr/local/google/home/elipsitz/Downloads/gamebub-n64/framework/scripts/build_core.py#L142-L152)):**
-   - `build_core.py` currently filters `additional_file_dirs` to `{".xdc", ".v", ".sv", ".vhdl"}` only, skipping `.vh`, `.svh`, `.hex`, and `.mem` files. Registering `.vh`/`.svh` (`file_type="verilogSource", is_include_file=True`) and `.hex`/`.mem` (`file_type="mem"`) allows cores with `$readmemh` tables and multi-directory SystemVerilog headers to synthesize without wrapping ROMs as `.sv` modules.
+1. **Applied in `framework/scripts/build_core.py` — Support Verilog Include (`.vh`/`.svh`) and Memory Init (`.hex`/`.mem`) Files ([build_core.py](file:///usr/local/google/home/elipsitz/Downloads/gamebub-n64/framework/scripts/build_core.py#L141-L159)):**
+   - Upstream `build_core.py` filtered `additional_file_dirs` to `{".xdc", ".v", ".sv", ".vhdl"}` only, skipping `.vh`, `.svh`, `.hex`, and `.mem` files. We registered `.vh`/`.svh` (`file_type="verilogSource"` / `"systemVerilogSource"`, `is_include_file=True`) and `.hex`/`.mem` (`file_type="mem"`, mapped by Edalize to Vivado `read_mem`) so `MIRLO64`'s `$readmemh("rsp_div_rom.hex", ...)`, `$readmemh("boot.hex", ...)`, and `` `include "mirlo_regs.svh" `` synthesize directly without modifying `MIRLO64`.
+2. **Optional Upstream Note — Include `heatshrink2` in `pyBuildCore.pythonDeps` ([package.mill](file:///usr/local/google/home/elipsitz/Downloads/gamebub-n64/framework/package.mill#L66)):**
+   - [build_core.py](file:///usr/local/google/home/elipsitz/Downloads/gamebub-n64/framework/scripts/build_core.py#L201-L208) attempts `import heatshrink2` to emit compressed `.bit.hs` bitstreams (`window_sz2=9, lookahead_sz2=6`), silently skipping compression on `ImportError`, while `pyBuildCore.pythonDeps` currently lists only `Seq("edalize==0.6.7")`. Adding `"heatshrink2"` enables automatic `.bit.hs` generation inside Mill's isolated Python venv (our `tools/package_dist.py` also generates `.bit.hs` directly).
 
 ---
 

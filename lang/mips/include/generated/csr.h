@@ -85,6 +85,12 @@
 #define CSR_APF_BRIDGE_SAVESTATE_DONE_OFS 0x13c
 #define CSR_APF_BRIDGE_SAVESTATE_DONE_ADDR (CSR_BASE + 0x13c)
 #define CSR_APF_BRIDGE_SAVESTATE_DONE_SIZE 1
+#define CSR_APF_BRIDGE_REQUEST_SETSIZE_OFS 0x140
+#define CSR_APF_BRIDGE_REQUEST_SETSIZE_ADDR (CSR_BASE + 0x140)
+#define CSR_APF_BRIDGE_REQUEST_SETSIZE_SIZE 1
+#define CSR_APF_BRIDGE_REQUEST_FLUSH_OFS 0x144
+#define CSR_APF_BRIDGE_REQUEST_FLUSH_ADDR (CSR_BASE + 0x144)
+#define CSR_APF_BRIDGE_REQUEST_FLUSH_SIZE 1
 
 /* APF_INPUT */
 #define CSR_APF_INPUT_BASE (CSR_BASE + 0x200)
@@ -479,6 +485,10 @@ static inline uint32_t apf_bridge_savestate_load_replace(uint32_t r, uint32_t v)
 static inline void apf_bridge_savestate_load_write(uint32_t v) { apf_bridge_savestate_write(apf_bridge_savestate_load_replace(apf_bridge_savestate_read(), v)); }
 static inline uint32_t apf_bridge_savestate_done_read(void) { return csr_read_simple(CSR_APF_BRIDGE_SAVESTATE_DONE_ADDR); }
 static inline void apf_bridge_savestate_done_write(uint32_t v) { csr_write_simple(v, CSR_APF_BRIDGE_SAVESTATE_DONE_ADDR); }
+static inline uint32_t apf_bridge_request_setsize_read(void) { return csr_read_simple(CSR_APF_BRIDGE_REQUEST_SETSIZE_ADDR); }
+static inline void apf_bridge_request_setsize_write(uint32_t v) { csr_write_simple(v, CSR_APF_BRIDGE_REQUEST_SETSIZE_ADDR); }
+static inline uint32_t apf_bridge_request_flush_read(void) { return csr_read_simple(CSR_APF_BRIDGE_REQUEST_FLUSH_ADDR); }
+static inline void apf_bridge_request_flush_write(uint32_t v) { csr_write_simple(v, CSR_APF_BRIDGE_REQUEST_FLUSH_ADDR); }
 
 /* APF_INPUT */
 static inline uint32_t apf_input_cont1_key_read(void) { return csr_read_simple(CSR_APF_INPUT_CONT1_KEY_ADDR); }

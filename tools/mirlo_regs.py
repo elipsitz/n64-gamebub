@@ -17,7 +17,7 @@ register is two words, the high one first.
 import os
 
 CSR_BASE = 0xF000_0000
-CLOCK_HZ = 62_832_000
+CLOCK_HZ = 62_500_000
 
 # block: (base offset, [(name, offset, access, words, fields)]), fields: [(name, lsb, size)]
 R, W, RW = "r", "w", "rw"
@@ -49,6 +49,8 @@ BLOCKS = [
         ("SAVESTATE",           0x38, RW, 1, [("SUPPORTED", 0, 1), ("SAVE", 1, 1), ("LOAD", 2, 1)]),
         # write: the request is over -- [0] 1: it failed (the Pocket's error), 0: done
         ("SAVESTATE_DONE",      0x3C, W,  1, []),
+        ("REQUEST_SETSIZE",     0x40, W,  1, []),
+        ("REQUEST_FLUSH",       0x44, W,  1, []),
     ]),
     ("APF_INPUT", 0x0200, [
         (f"CONT{i}_{k}", 0x00 + 4 * (4 * j + i - 1), R, 1, [])
