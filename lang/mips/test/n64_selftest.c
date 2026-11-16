@@ -41,7 +41,7 @@ static inline uint16_t rgba5551(uint32_t r5, uint32_t g5, uint32_t b5)
     return (uint16_t)(((r5 & 31u) << 11) | ((g5 & 31u) << 6) | ((b5 & 31u) << 1) | 1u);
 }
 
-/* 1. VR4300 64-bit integer + COP1 FPU self-test */
+/* 1. VR4300 64-bit integer (including SDL/SDR/LDL/LDR) + COP1 single & double FPU self-test */
 static int test_cpu_fpu(void)
 {
     uint32_t hi_out = 0, lo_out = 0;
@@ -67,17 +67,72 @@ static int test_cpu_fpu(void)
     );
     if (hi_out != 0x0004A90Bu || lo_out != 320u) return 0;
 
+    /* Test unaligned 64-bit SDL/SDR + LDL/LDR across byte offsets 1..7 */
+    volatile uint8_t *ua_buf = (volatile uint8_t *)0xA0052000u;
+    for (uint32_t off = 1u; off < 8u; off++) {
+        for (uint32_t k = 0; k < 24u; k++) ua_buf[k] = (uint8_t)(0xE0u + k);
+        uint32_t out_hi = 0, out_lo = 0;
+        __asm__ volatile(
+            ".set push\n"
+            ".set noreorder\n"
+            ".set mips3\n"
+            "li     $t0, 0x01234567\n"
+            "dsll   $t0, $t0, 16\n"
+            "ori    $t0, $t0, 0x89AB\n"
+            "dsll   $t0, $t0, 16\n"
+            "ori    $t0, $t0, 0xCDEF\n"
+            "sdl    $t0, 0(%2)\n"
+            "sdr    $t0, 7(%2)\n"
+            "ldl    $t1, 0(%2)\n"
+            "ldr    $t1, 7(%2)\n"
+            "dsrl32 %0, $t1, 0\n"
+            "sll    %1, $t1, 0\n"
+            ".set pop\n"
+            : "=r"(out_hi), "=r"(out_lo)
+            : "r"(ua_buf + off)
+            : "t0", "t1", "memory"
+        );
+        if (out_hi != 0x01234567u || out_lo != 0x89ABCDEFu) return 0;
+        if (ua_buf[off - 1u] != (uint8_t)(0xE0u + off - 1u)) return 0;
+        if (ua_buf[off + 8u] != (uint8_t)(0xE0u + off + 8u)) return 0;
+    }
+
     volatile float fa = 3.5f, fb = 4.25f, fc = -1.875f;
     float fres = fa * fb + fc;              /* 14.875 - 1.875 = 13.0 */
     union { float f; uint32_t u; } conv = { fres };
-    return conv.u == 0x41500000u;           /* IEEE-754 13.0f */
+    if (conv.u != 0x41500000u) return 0;
+
+    /* Test hardware COP1 double-precision FPU (cvt.d.w + mul.d + sqrt.d + cvt.w.d -> sqrt(9.0 * 16.0) = 12) */
+    uint32_t d_int_out = 0;
+    __asm__ volatile(
+        ".set push\n"
+        ".set noreorder\n"
+        ".set doublefloat\n"
+        "li      $t0, 9\n"
+        "li      $t1, 16\n"
+        "mtc1    $t0, $f0\n"
+        "mtc1    $t1, $f2\n"
+        "nop\n"
+        "cvt.d.w $f0, $f0\n"
+        "cvt.d.w $f2, $f2\n"
+        "mul.d   $f4, $f0, $f2\n"
+        "sqrt.d  $f6, $f4\n"
+        "cvt.w.d $f8, $f6\n"
+        "mfc1    %0, $f8\n"
+        "nop\n"
+        ".set pop\n"
+        : "=r"(d_int_out)
+        :
+        : "t0", "t1", "$f0", "$f1", "$f2", "$f3", "$f4", "$f5", "$f6", "$f7", "$f8"
+    );
+    return d_int_out == 12u;
 }
 
-/* 2. Dual-rank 64 MiB SDRAM + 512 KiB 10 ns SRAM self-test */
+/* 2. Dual-rank 64 MiB SDRAM + 512 KiB 10 ns SRAM + L1/L2 PI ROM Cache self-test */
 static int test_memory(void)
 {
-    volatile uint32_t *r0   = (volatile uint32_t *)0x40200000u; /* SDRAM Rank 0 */
-    volatile uint32_t *r1   = (volatile uint32_t *)0x42000000u; /* SDRAM Rank 1 */
+    volatile uint32_t *r0   = (volatile uint32_t *)0x40200000u; /* SDRAM Rank 0 (Cartridge ROM + 1 MiB) */
+    volatile uint32_t *r1   = (volatile uint32_t *)0x42000000u; /* SDRAM Rank 1 (Cartridge ROM + 31 MiB) */
     volatile uint32_t *sram = (volatile uint32_t *)0x34100000u; /* 10 ns Async SRAM */
 
     for (uint32_t i = 0; i < 256u; i++) {
@@ -91,43 +146,86 @@ static int test_memory(void)
         if (r1[i]   != (0x5A5A0000u ^ (i * 0x03030303u))) return 0;
         if (sram[i] != (0xC3C30000u ^ (i * 0x07070707u))) return 0;
     }
+
+    /* Exercise Cartridge ROM L1 + L2 Async SRAM cache (0x30100000 & 0x31F00000 collide in L1, distinct in L2!) */
+    volatile uint32_t *rom_a = (volatile uint32_t *)0x30100000u; /* maps to SDRAM 0x40200000 */
+    volatile uint32_t *rom_b = (volatile uint32_t *)0x31F00000u; /* maps to SDRAM 0x42000000 */
+    if (rom_a[7] != (0xA5A50000u ^ (7u * 0x01010101u))) return 0; /* cold miss -> fills L1 + L2 */
+    if (rom_b[7] != (0x5A5A0000u ^ (7u * 0x03030303u))) return 0; /* evicts rom_a from L1, keeps in L2 */
+    if (rom_a[3] != (0xA5A50000u ^ (3u * 0x01010101u))) return 0; /* L1 miss + L2 Async SRAM hit! */
     return 1;
 }
 
-/* 3. RSP 8-lane SIMD vector + IMEM/DMEM DMA self-test */
+/* 3. RSP 8-lane SIMD accumulator cascade + unaligned DMEM rotations + MFC2 + DMA self-test */
 static int test_rsp_simd(void)
 {
     volatile uint32_t *ucode = (volatile uint32_t *)0xA0050000u;
     volatile uint16_t *vdata = (volatile uint16_t *)0xA0050100u;
+    volatile uint32_t *wdata = (volatile uint32_t *)0xA0050100u;
 
     /* Halt RSP and clear broke/interrupt bits */
     SP_REG[4] = 0x0000000Au;
     for (int i = 0; i < 8; i++) {
-        vdata[i]      = (uint16_t)(100 + i * 11);
-        vdata[8 + i]  = (uint16_t)(2000 + i * 100);
-        vdata[16 + i] = 0u;
+        vdata[i]      = (uint16_t)(100 + i * 11);       /* DMEM 0x00..0x0F: v1 */
+        vdata[8 + i]  = (uint16_t)(2000 + i * 100);     /* DMEM 0x10..0x1F: v2 */
+        vdata[16 + i] = (uint16_t)(3 + i);              /* DMEM 0x20..0x2F: v4 */
+        vdata[24 + i] = 0u;                             /* DMEM 0x30..0x3F: out vadd */
+        vdata[32 + i] = 0u;                             /* DMEM 0x40..0x4F: out VSAR mid (all 8 lanes!) */
+        vdata[40 + i] = 0u;                             /* DMEM 0x50..0x5F: out SDV +0 / SDV +8 rotation! */
     }
+    wdata[24] = 0x11223344u;                            /* DMEM 0x60 (+0) */
+    wdata[25] = 0x55667788u;                            /* DMEM 0x64 (+4) */
+    wdata[26] = 0x99AABBCCu;                            /* DMEM 0x68 (+8) */
+    wdata[27] = 0xDDEEFF00u;                            /* DMEM 0x6C (+12) */
+    wdata[28] = 0u; wdata[29] = 0u; wdata[30] = 0u; wdata[31] = 0u; /* DMEM 0x70..0x7F */
 
-    ucode[0] = 0x34010000u;                                               /* ori  $1, $0, 0x0000 */
-    ucode[1] = (0x32u << 26) | (1u << 21) | (1u << 16) | (4u << 11);      /* lqv  $v1, 0($1)     */
-    ucode[2] = 0x34010010u;                                               /* ori  $1, $0, 0x0010 */
-    ucode[3] = (0x32u << 26) | (1u << 21) | (2u << 16) | (4u << 11);      /* lqv  $v2, 0($1)     */
-    ucode[4] = 0x4A000000u  | (2u << 16) | (1u << 11) | (3u << 6) | 0x10u;/* vadd $v3, $v1, $v2  */
-    ucode[5] = 0x34010020u;                                               /* ori  $1, $0, 0x0020 */
-    ucode[6] = (0x3Au << 26) | (1u << 21) | (3u << 16) | (4u << 11);      /* sqv  $v3, 0($1)     */
-    ucode[7] = 0x0000000Du;                                               /* break               */
+    int pc = 0;
+    ucode[pc++] = 0x34010000u;                                                /* ori  $1, $0, 0x0000       */
+    ucode[pc++] = (0x32u << 26) | (1u << 21) | (1u << 16) | (4u << 11);       /* lqv  $v1, 0($1)           */
+    ucode[pc++] = 0x34010010u;                                                /* ori  $1, $0, 0x0010       */
+    ucode[pc++] = (0x32u << 26) | (1u << 21) | (2u << 16) | (4u << 11);       /* lqv  $v2, 0($1)           */
+    ucode[pc++] = 0x34010020u;                                                /* ori  $1, $0, 0x0020       */
+    ucode[pc++] = (0x32u << 26) | (1u << 21) | (4u << 16) | (4u << 11);       /* lqv  $v4, 0($1)           */
+    ucode[pc++] = 0x4A000000u  | (2u << 16) | (1u << 11) | (3u << 6) | 0x10u; /* vadd  $v3, $v1, $v2       */
+    ucode[pc++] = 0x34010030u;                                                /* ori  $1, $0, 0x0030       */
+    ucode[pc++] = (0x3Au << 26) | (1u << 21) | (3u << 16) | (4u << 11);       /* sqv  $v3, 0($1)           */
 
-    /* DMA vectors into DMEM 0x000 (48 bytes = 0x2F) */
+    /* 8-lane accumulator test: VMUDN acc = v1 * v4 (lo), then VMADH acc += (v2 * v4) << 16, then VSAR mid -> v5! */
+    ucode[pc++] = 0x4A000000u  | (4u << 16) | (1u << 11) | (6u << 6) | 0x06u; /* vmudn $v6, $v1, $v4       */
+    ucode[pc++] = 0x4A000000u  | (4u << 16) | (2u << 11) | (7u << 6) | 0x0Fu; /* vmadh $v7, $v2, $v4       */
+    ucode[pc++] = 0x4A000000u  | (9u << 21) | (5u << 6)  | 0x1Du;             /* vsar  $v5, acc_md (e=9)   */
+    ucode[pc++] = 0x34010040u;                                                /* ori  $1, $0, 0x0040       */
+    ucode[pc++] = (0x3Au << 26) | (1u << 21) | (5u << 16) | (4u << 11);       /* sqv  $v5, 0($1)           */
+
+    /* Vector store rotation test: SDV v3[0..3] to 0x50 (+0) and SDV v3[8..15] (el=8) to 0x58 (+8)! */
+    ucode[pc++] = 0x34010050u;                                                /* ori  $1, $0, 0x0050       */
+    ucode[pc++] = (0x3Au << 26) | (1u << 21) | (3u << 16) | (3u << 11);       /* sdv  $v3[0], 0($1)        */
+    ucode[pc++] = 0x34010058u;                                                /* ori  $1, $0, 0x0058       */
+    ucode[pc++] = (0x3Au << 26) | (1u << 21) | (3u << 16) | (3u << 11) | (8u << 7); /* sdv $v3[8], 0($1)   */
+
+    /* Scalar unaligned DMEM word rotation (+4, +8, +12) + MFC2 element 12 (lane 6)! */
+    ucode[pc++] = (0x23u << 26) | (0u << 21) | (8u << 16)  | 0x0064u;         /* lw   $8,  0x64($0) (+4)   */
+    ucode[pc++] = (0x23u << 26) | (0u << 21) | (9u << 16)  | 0x0068u;         /* lw   $9,  0x68($0) (+8)   */
+    ucode[pc++] = (0x23u << 26) | (0u << 21) | (10u << 16) | 0x006Cu;         /* lw   $10, 0x6C($0) (+12)  */
+    ucode[pc++] = (0x12u << 26) | (0u << 21) | (11u << 16) | (3u << 11) | (12u << 7); /* mfc2 $11, $v3[12] */
+    ucode[pc++] = (0x2Bu << 26) | (0u << 21) | (8u << 16)  | 0x0070u;         /* sw   $8,  0x70($0)        */
+    ucode[pc++] = (0x2Bu << 26) | (0u << 21) | (9u << 16)  | 0x0074u;         /* sw   $9,  0x74($0)        */
+    ucode[pc++] = (0x2Bu << 26) | (0u << 21) | (10u << 16) | 0x0078u;         /* sw   $10, 0x78($0)        */
+    ucode[pc++] = (0x2Bu << 26) | (0u << 21) | (11u << 16) | 0x007Cu;         /* sw   $11, 0x7C($0)        */
+    ucode[pc++] = 0x0000000Du;                                                /* break                     */
+
+    /* DMA 128 bytes of data into DMEM 0x000 */
     while (SP_REG[6] & 1u) ;
     SP_REG[0] = 0x0000u;
     SP_REG[1] = 0x00050100u;
-    SP_REG[2] = 48u - 1u;
+    SP_REG[2] = 128u - 1u;
     while (SP_REG[6] & 1u) ;
 
-    /* DMA microcode into IMEM 0x1000 (32 bytes = 0x1F) */
+    /* DMA microcode into IMEM 0x1000 */
+    uint32_t ulen = ((uint32_t)pc * 4u + 7u) & ~7u;
     SP_REG[0] = 0x1000u;
     SP_REG[1] = 0x00050000u;
-    SP_REG[2] = 32u - 1u;
+    SP_REG[2] = ulen - 1u;
     while (SP_REG[6] & 1u) ;
 
     /* Run from SP_PC = 0 and wait for BREAK (status bit 1) */
@@ -136,16 +234,23 @@ static int test_rsp_simd(void)
     for (uint32_t t = 0; t < 100000u && !(SP_REG[4] & 2u); t++) ;
     if (!(SP_REG[4] & 2u)) return 0;
 
-    /* DMA output vector from DMEM 0x020 -> RDRAM 0x00050120 (16 bytes = 0x0F) */
-    SP_REG[0] = 0x0020u;
-    SP_REG[1] = 0x00050120u;
-    SP_REG[3] = 16u - 1u;
+    /* DMA results DMEM 0x030..0x07F -> RDRAM 0x00050130 (80 bytes) */
+    SP_REG[0] = 0x0030u;
+    SP_REG[1] = 0x00050130u;
+    SP_REG[3] = 80u - 1u;
     while (SP_REG[6] & 1u) ;
 
     for (int i = 0; i < 8; i++) {
-        uint16_t exp = (uint16_t)((100 + i * 11) + (2000 + i * 100));
-        if (vdata[16 + i] != exp) return 0;
+        uint16_t exp_sum = (uint16_t)((100 + i * 11) + (2000 + i * 100));
+        uint16_t exp_mid = (uint16_t)((2000 + i * 100) * (3 + i));
+        if (vdata[24 + i] != exp_sum) return 0; /* VADD + SQV */
+        if (vdata[32 + i] != exp_mid) return 0; /* 8-lane VMUDN/VMADH/VSAR acc_m[0..7]! */
+        if (vdata[40 + i] != exp_sum) return 0; /* SDV +0 / +8 st_rot[3:2] rotation! */
     }
+    if (wdata[28] != 0x55667788u) return 0;     /* LW +4 x_rot[3:2]=1 */
+    if (wdata[29] != 0x99AABBCCu) return 0;     /* LW +8 x_rot[3:2]=2 */
+    if (wdata[30] != 0xDDEEFF00u) return 0;     /* LW +12 x_rot[3:2]=3 */
+    if ((wdata[31] & 0xFFFFu) != (uint32_t)((100 + 6 * 11) + (2000 + 6 * 100))) return 0; /* MFC2 e=12 */
     return 1;
 }
 

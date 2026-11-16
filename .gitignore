@@ -7,3 +7,4 @@ dist/
 sim/**/obj*
 sim/**/*.log
 dist/
+dist.zip

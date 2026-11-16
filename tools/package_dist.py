@@ -143,6 +143,18 @@ def refresh_bitstream_gitrev(bit_path: Path, git_rev: str) -> None:
     new_raw = re.sub(rb";GitRev=[0-9a-fA-F]{12}", b";GitRev=" + git_rev.encode("ascii"), bytes(raw), count=1)
     if len(new_raw) == len(raw) and new_raw != bytes(raw):
         bit_path.write_bytes(new_raw)
+        return
+    if b";GitRev=" not in raw:
+        header = b"\x00\x09\x0f\xf0\x0f\xf0\x0f\xf0\x0f\xf0\x00\x00\x01a"
+        if bytes(raw[: len(header)]) == header:
+            idx = len(header)
+            tag_len = int.from_bytes(raw[idx : idx + 2], "big")
+            if tag_len >= 1:
+                tag = bytes(raw[idx + 2 : idx + 2 + tag_len])
+                new_tag = tag[:-1] + f";GitRev={git_rev}".encode("ascii") + b"\x00"
+                raw[idx + 2 : idx + 2 + tag_len] = new_tag
+                raw[idx : idx + 2] = len(new_tag).to_bytes(2, "big")
+                bit_path.write_bytes(bytes(raw))
 
 
 def package_one(bundle_name: str) -> None:
