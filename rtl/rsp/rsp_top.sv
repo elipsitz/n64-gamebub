@@ -144,11 +144,11 @@ logic [31:0] iw_data, ia_q;
 logic        im_dma;                  // (below: a DMA of IMEM runs)
 wire  [9:0]  ib_addr = im_dma ? iw_addr : i_addr + 10'd1;    // (one address for the port: a write is a DMA's, im_dma)
 always_ff @(posedge clk) begin
-    if (iw_we) begin imem[ib_addr] <= iw_data; ia_q <= iw_data; end
-    else ia_q <= imem[ib_addr];
+    if (iw_we) imem[ib_addr] <= iw_data;
+    ia_q <= imem[ib_addr];
 end
 always_ff @(posedge clk) i2_ok <= !rst && !im_dma && !iw_we;
-always_ff @(posedge clk) i_data <= imem[i_addr];
+always_ff @(posedge clk) if (su_run || !iw_we) i_data <= imem[i_addr];
 assign i_data2 = ia_q;
 
 // ----------------------------------------------------------------- DMEM --
@@ -199,11 +199,20 @@ rsp_dpram dmem (.clk, .a_row(x_row), .a_we((x_valid && x_we) ? x_be16 : 16'd0), 
     .b_adr(dx_addr), .b_dat_r(dx_data));
 always_ff @(posedge clk) x_rot <= x_rot_n;
 // byte m of the result is byte (m + x_rot) mod 16 of the line: by words, then bytes
-logic [127:0] q_w;
+logic [31:0]  q16_w [0:3];
+logic [31:0]  q_rot_w [0:3];
+logic [7:0]   q_rot_b [0:15];
 (* keep *) logic [127:0] x_rd;
 always_comb begin
-    for (int m = 0; m < 16; m++) q_w[127 - 8 * m -: 8] = q16[127 - 8 * ((m + 4 * int'(x_rot[3:2])) & 15) -: 8];
-    for (int m = 0; m < 16; m++) x_rd[127 - 8 * m -: 8] = q_w[127 - 8 * ((m + int'(x_rot[1:0])) & 15) -: 8];
+    for (int w = 0; w < 4; w++) q16_w[w] = q16[127 - 32 * w -: 32];
+    for (int w = 0; w < 4; w++) q_rot_w[w] = q16_w[2'(2'(w) + x_rot[3:2])];
+    for (int w = 0; w < 4; w++) begin
+        q_rot_b[4 * w + 0] = q_rot_w[w][31:24];
+        q_rot_b[4 * w + 1] = q_rot_w[w][23:16];
+        q_rot_b[4 * w + 2] = q_rot_w[w][15:8];
+        q_rot_b[4 * w + 3] = q_rot_w[w][7:0];
+    end
+    for (int m = 0; m < 16; m++) x_rd[127 - 8 * m -: 8] = q_rot_b[4'(4'(m) + {2'b00, x_rot[1:0]})];
 end
 assign m_rdata   = x_rd[127:96];
 assign m_rdata16 = x_rd;
@@ -321,7 +330,7 @@ end
 wire         sp_wr   = wq_v;                               // a word is written into SP memory
 // SP memory: DMEM through the access above, IMEM through its second port
 // (IMEM is only ever written by a DMA)
-wire         dm_rd   = ds == D_OUT && !d_im && 2'(pf_n + 2'(pf_rd)) < 2'd2;   // out of DMEM: a pair read (from registers: m_stall's)
+wire         dm_rd   = ds == D_OUT && !d_im && (pf_n + {1'b0, pf_rd}) < 2'd2;   // out of DMEM: a pair read (from registers: m_stall's)
 assign dm_valid = (sp_wr && !d_im) || dm_rd;
 assign tr_mw    = dm_valid && tr_e_mem;
 assign dm_we    = sp_wr;
@@ -427,7 +436,7 @@ always_ff @(posedge clk) begin
             // (DMEM: a read's pair into the FIFO the cycle after; the head to ob as it empties)
             pf_rd <= dm_rd;
             if (pf_rd) pf[pf_h ^ pf_n[0]] <= m_rdata16[127:64];
-            pf_n <= pf_n + 2'(pf_rd) - 2'(o_load && !d_im);
+            pf_n <= pf_n + {1'b0, pf_rd} - {1'b0, (o_load && !d_im)};
             if (o_load && !d_im) pf_h <= !pf_h;
             if (d_im ? o_load : dm_rd) np <= np + 9'd1;
             if (iq == 2'd1) ih_q <= ia_q;

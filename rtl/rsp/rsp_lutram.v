@@ -18,6 +18,8 @@ module rsp_lutram (
     genvar b;
     generate for (b = 0; b < 16; b = b + 1) begin : lane
         (* ram_style = "distributed" *) reg [7:0] mb [0:31];
+        integer k;
+        initial for (k = 0; k < 32; k = k + 1) mb[k] = 8'd0;
         always @(posedge clk) if (we[b]) mb[wa] <= wd[8 * b +: 8];
         assign q[8 * b +: 8] = mb[ra];
     end endgenerate
