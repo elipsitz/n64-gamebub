@@ -929,7 +929,7 @@ module n64_soc_gb #(
         .we      (pd_we),
         .adr     ({6'd0, pd_adr}),
         .dat_w   (pd_wd),
-        .sel     (d_sel),
+        .sel     ((pa_si || pa_ai) ? 4'hF : d_sel),
         .ack     (pa_ack),
         .dat_r   (pa_dat_r),
         .x_sel   (pa_ext_sel),

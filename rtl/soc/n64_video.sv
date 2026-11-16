@@ -258,6 +258,7 @@ always_ff @(posedge clk) ann_s <= {ann_s[0], ann};
 // one row (the pitch: 320 words of a 640-pixel one, 288 of a 576-pixel one) on, or with WIDTH 1280 one 640-pixel row (320 words).
 // (A serrated 240-row buffer, or another pitch, is not a pair of fields: shown as any picture is.)
 wire         wv_rq  = vi_il && !no_weave && (vi_width[11:1] == 11'd640 || ((vi_width[11:1] == 11'd320 || vi_width[11:1] == 11'd288) && vi_ys >= 12'h600));
+wire  [8:0]  vi_nr  = (vi_rows == 0 || vi_rows > 9'd240) ? 9'd240 : vi_rows;
 wire  [9:0]  vi_nr2 = {vi_nr, 1'b0};
 logic        hid_f;                // the hidden coverage plane is wanted (a filter is on)
 logic [10:0] col;                  // the read's word in its row
@@ -271,7 +272,6 @@ logic [FAW:0] wlevel;              // the FIFO's fill as sys sees it (words)
 wire         keep = m_rvalid && !fb_sys && drop == 0;
 wire         hires  = |vi_width[11:9];                       // 512 or more: a hi-res picture
 wire         px32_n = vi_px32 && N64FB;
-wire  [8:0]  vi_nr  = (vi_rows == 0 || vi_rows > 9'd240) ? 9'd240 : vi_rows;
 // the next row: this one and the pitches Y_SCALE's accumulator steps (0 for an enlarged line: the row again, 1, 2)
 wire  [11:0] yan    = {2'b00, yacc} + ys_f;                    // (at most 0x3FF + 0x800: never both carries)
 // (a woven frame: the second field's line is one row on -- the pitch, with Y_SCALE 2.0, a 640-pixel row with WIDTH 1280, 320 words
@@ -559,8 +559,8 @@ endfunction
 // second smallest and second largest of six, by rank: each pair compared once (15 compares; equal values in the order
 // of their numbers), then the value that exactly one of the others comes before, and the one that comes before exactly one
 function automatic logic [9:0] mm2(input logic [4:0] a, b, c, d, e, f);
-    logic [4:0] v [6];
-    logic [5:0] bf [6], af [6];                     // bf[i][j]: v[j] comes before v[i]; af[i][j]: after it
+    logic [4:0] v [0:5];
+    logic [5:0] bf [0:5], af [0:5];                 // bf[i][j]: v[j] comes before v[i]; af[i][j]: after it
     logic [4:0] lo, hi;
     v[0] = a; v[1] = b; v[2] = c; v[3] = d; v[4] = e; v[5] = f;
     for (int i = 0; i < 6; i++) begin

@@ -133,7 +133,7 @@ wire is_sd   = c_addr[31:26] == 6'b010000;
 wire is_boot = c_addr[31:12] == 20'h1FC00 && !(CPU_SIW && hwx_on && c_addr[11:6] == 6'h1F);
 
 // the boot ROM: a read a cycle later
-(* rom_style = "block" *) logic [31:0] boot [BOOT_WORDS];
+(* rom_style = "block" *) logic [31:0] boot [0:BOOT_WORDS-1];
 initial if (BOOTROM != "") $readmemh(BOOTROM, boot);
 logic [31:0] boot_q; logic boot_ack;
 always_ff @(posedge clk) begin

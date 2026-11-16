@@ -14,15 +14,16 @@ module afifo #(parameter int W = 32, parameter int AW = 9) (
     output logic [W-1:0] r_data,
     output logic         r_empty
 );
-(* ram_style = "block" *) logic [W-1:0] mem [1 << AW];
+(* ram_style = "block" *) logic [W-1:0] mem [0:(1 << AW)-1];
 function automatic logic [AW:0] g(input logic [AW:0] b); return b ^ (b >> 1); endfunction
 function automatic logic [AW:0] b(input logic [AW:0] gg);
     logic [AW:0] r; r[AW] = gg[AW];
     for (int i = AW - 1; i >= 0; i--) r[i] = r[i + 1] ^ gg[i];
     return r;
 endfunction
-// write side
+// write & read pointers
 logic [AW:0] wptr, wptr_g, rptr_g_w1, rptr_g_w2, rptr_w;
+logic [AW:0] rptr, rptr_g, wptr_g_r1, wptr_g_r2;
 always_ff @(posedge wclk) begin
     if (wrst) begin wptr <= 0; wptr_g <= 0; rptr_g_w1 <= 0; rptr_g_w2 <= 0; rptr_w <= 0; w_level <= 0; end
     else begin
@@ -37,7 +38,6 @@ always_ff @(posedge wclk) begin
 end
 always_ff @(posedge wclk) if (w_en) mem[wptr[AW-1:0]] <= w_data;
 // read side
-logic [AW:0] rptr, rptr_g, wptr_g_r1, wptr_g_r2;
 wire  [AW:0] rptr_n = rptr + (r_en && !r_empty);
 always_ff @(posedge rclk) begin
     if (rrst) begin rptr <= 0; rptr_g <= 0; wptr_g_r1 <= 0; wptr_g_r2 <= 0; end

@@ -550,7 +550,7 @@ function automatic logic cacheable(input logic [31:0] va, input logic gv);
 endfunction
 
 // =============================================================== state
-(* ram_style = "distributed" *) logic [31:0] rf_lo [32];
+(* ram_style = "distributed" *) logic [31:0] rf_lo [0:31];
 // no reset: MLABs (the hardware's registers are undefined at power-up; the
 // co-simulation starts both machines from zero)
 initial for (int i = 0; i < 32; i++) rf_lo[i] = 0;
@@ -699,14 +699,20 @@ end endgenerate
 // =============================================================== caches
 localparam int IC_LINES = 1 << IC_LOG2, DC_LINES = 1 << DC_LOG2;
 localparam int IW = IC_LOG2 + 3, DW = DC_LOG2 + 2;      // a word's address in them: pa[IW+1:2], pa[DW+1:2]
-logic [31:0] ic_data [IC_LINES * 8];
+logic [31:0] ic_data [0:IC_LINES * 8 - 1];
 // The tag: {valid, pa[28:14]}. With the page registers (PG) a line's index comes from the virtual address, so the physical bits
 // between the page offset and the tag's first -- pa[13:12], which the index no longer says -- are in it too: {valid, pa[28:12]}.
 localparam int TLO = PG ? 12 : 14;           // the tag's lowest physical address bit
 localparam int ITW = 28 - TLO + 1;           // its width without the valid bit
-logic [ITW:0] ic_tag  [IC_LINES];
-logic [7:0]  dc_b0 [DC_LINES * 4], dc_b1 [DC_LINES * 4], dc_b2 [DC_LINES * 4], dc_b3 [DC_LINES * 4];   // byte lanes
-logic [16:0] dc_tag  [DC_LINES];            // {valid, pa[28:13]}
+logic [ITW:0] ic_tag  [0:IC_LINES - 1];
+logic [7:0]  dc_b0 [0:DC_LINES * 4 - 1], dc_b1 [0:DC_LINES * 4 - 1], dc_b2 [0:DC_LINES * 4 - 1], dc_b3 [0:DC_LINES * 4 - 1]; // byte lanes
+logic [16:0] dc_tag  [0:DC_LINES - 1];       // {valid, pa[28:13]}
+initial begin
+    for (int i = 0; i < IC_LINES * 8; i++) ic_data[i] = 32'd0;
+    for (int i = 0; i < IC_LINES; i++)     ic_tag[i]  = '0;
+    for (int i = 0; i < DC_LINES * 4; i++) begin dc_b0[i] = 8'd0; dc_b1[i] = 8'd0; dc_b2[i] = 8'd0; dc_b3[i] = 8'd0; end
+    for (int i = 0; i < DC_LINES; i++)     dc_tag[i]  = 17'd0;
+end
 logic [IW-1:0] ic_raddr; logic [31:0] ic_q; logic [ITW:0] ic_tq;
 logic [DW-1:0] dc_raddr; logic [31:0] dc_q; logic [16:0] dc_tq;
 // writes: driven combinationally below (the write happens at the edge that ends
@@ -743,11 +749,14 @@ end
 
 // =============================================================== write buffer
 localparam int WB_N = 8;
-logic [31:0] wb_addr [WB_N];
-logic [31:0] wb_data [WB_N];
-logic [3:0]  wb_strb [WB_N];
+logic [31:0] wb_addr [0:WB_N-1];
+logic [31:0] wb_data [0:WB_N-1];
+logic [3:0]  wb_strb [0:WB_N-1];
 logic [3:0]  wb_rp, wb_wp;
 logic [3:0]  wb_cnt;                         // (FAST: wb_wp - wb_rp, kept)
+logic        m_k_ua;                         // (FAST, XUA: ldl, ldr, sdl, sdr, registered with the instruction)
+logic        m_shw2;                         // (XUA) and the cycle after it: m_st_lo is sh_r's a cycle later
+logic        m_shwait;                       // M's d-shift is not done: !(sh_on && sh_n == 0), registered; ldl ... sdr's rotation
 wire  [3:0]  wb_n = FAST ? wb_cnt : wb_wp - wb_rp;
 wire         wb_empty = XWB ? 1'b1 : FAST ? wb_cnt == 4'd0 : wb_rp == wb_wp;
 wire         wb_full  = XWB ? st_full || (m_k_ua && (m_shwait || m_shw2)) : wb_n == 4'(WB_N);   // (XUA: and an unaligned store waits for its doubleword to be rotated)
@@ -794,6 +803,7 @@ logic        d_k_cti, d_k_pred;              // FAST: D's instruction is a branc
 // (rd_fix). A stack that has nothing is no guess.
 localparam int RASN = 4;
 (* ram_style = "distributed" *) logic [29:0] ras [0:RASN-1];
+initial for (int i = 0; i < RASN; i++) ras[i] = 30'd0;
 logic [$clog2(RASN)-1:0] ras_t;              // the top
 logic [$clog2(RASN):0]   ras_n;              // how many are valid
 logic [29:0] d_jt;
@@ -816,9 +826,6 @@ logic [31:0] m_a_lo;                         // rs (mthi/mtlo, mult/div)
 ctl_t        m_c;
 logic [31:0] m_pc, m_insn, m_res, m_addr, m_st_lo, m_badv;
 logic [31:0] m_a_hx, m_st_hx;
-logic        m_k_ua;                         // (FAST, XUA: ldl, ldr, sdl, sdr, registered with the instruction)
-logic        m_shw2;                         // (XUA) and the cycle after it: m_st_lo is sh_r's a cycle later
-logic        m_shwait;                       // M's d-shift is not done: !(sh_on && sh_n == 0), registered; ldl ... sdr's rotation
 logic        m_ph;                           // a cached 64-bit access: its second word
 logic [4:0]  m_exc_code;
 
@@ -893,8 +900,8 @@ wire d_stall = d_ok && ((!FAST && (haz_br || haz_fcc)) || haz_late || haz_serial
 // what E gets: with a 64-bit operand, the instruction as M's unit does it
 ctl_t d_cx;
 always_comb begin
-    logic aw, bw;
-    x_t x;
+    automatic logic aw, bw;
+    automatic x_t x;
     aw = d_c.use_rs && rf_aw;
     bw = d_c.use_rt && !d_c.b_imm && rf_bw;
     d_cx = d_c;
@@ -1115,7 +1122,7 @@ end
 // (FAST) a store's word and strobes, put in their lanes here (but sd's and the FPU's)
 logic [31:0] e_sdata; logic [3:0] e_sstrb;
 always_comb begin
-    logic [1:0] k;
+    automatic logic [1:0] k;
     k = BIG ? e_ea[1:0] : ~e_ea[1:0]; e_sdata = e_b; e_sstrb = 4'b1111;
     case (e_c.st)
     S_SB:  begin e_sdata = {4{e_b[7:0]}};  e_sstrb = 4'b1000 >> k; end
@@ -1286,8 +1293,8 @@ wire [63:0] m_w64 = (ms == MS_DONE) ? ms_data : BIG ? {ms_data[63:32], dc_qm} : 
 
 logic [31:0] m_ld_val;
 always_comb begin
-    logic [1:0] k, kl;
-    logic [31:0] w, rt;
+    automatic logic [1:0] k, kl;
+    automatic logic [31:0] w, rt;
     // k: the byte's big-endian number in its word (little-endian lwl at byte
     // k is big-endian lwl at 3 - k, the same for lwr/swl/swr); kl its lane
     k = BIG ? m_addr[1:0] : ~m_addr[1:0]; kl = ~k; w = m_word; rt = m_st_lo;
@@ -1387,12 +1394,12 @@ wire m_second = m_cw ? m_ph : ms == MS_SLOW_B;
 // steps more -- the strobes, by byte p of the doubleword (0 is the most significant, word 0's lane 3)
 logic [7:0] m_ua_mask; logic [3:0] m_ua_strb;
 always_comb begin
-    for (int p = 0; p < 8; p++) m_ua_mask[p] = m_insn[26] ? p <= int'(m_addr[2:0]) : p >= int'(m_addr[2:0]);
+    for (int p = 0; p < 8; p++) m_ua_mask[p] = m_insn[26] ? (3'(p) <= m_addr[2:0]) : (3'(p) >= m_addr[2:0]);
     m_ua_strb = m_second ? {m_ua_mask[4], m_ua_mask[5], m_ua_mask[6], m_ua_mask[7]} : {m_ua_mask[0], m_ua_mask[1], m_ua_mask[2], m_ua_mask[3]};
 end
 logic [31:0] m_st_data; logic [3:0] m_st_strb;
 always_comb begin
-    logic [1:0] k;
+    automatic logic [1:0] k;
     k = BIG ? m_addr[1:0] : ~m_addr[1:0]; m_st_data = 32'd0; m_st_strb = 4'd0;
     case (m_c.st)
     S_SB:  begin m_st_data = {4{m_st_lo[7:0]}};  m_st_strb = 4'b1000 >> k; end
@@ -1488,6 +1495,7 @@ wire [3:0]  m_cst_strb = m_st_strb;
 wire [DW-1:0] m_cst_idx = m_cw ? {m_addr[DW+1:3], m_ph} : m_addr[DW+1:2];
 wire [31:0] m_cst_pa   = m_cw ? {m_pa[31:3], m_ph, 2'b00} : {m_pa[31:2], 2'b00};
 wire m_is_md = FAST ? m_k_md : m_c.md != MD_NONE;
+wire m_commit_e;
 // a store into the write buffer as it completes (a 64-bit one's first word: m_w0)
 wire m_wb_push = (m_commit_e || m_w0) && m_st && (!m_wide || m_cw) && !m_sc_fail && !m_devst;
 // XWB: and the slow path's stores, a word as soon as it is taken (a device's
@@ -1541,7 +1549,7 @@ wire m_stall = (FAST ? m_valid : m_live) && !m_done;
 wire m_cache_go = m_live && m_c.cache && !(FAST && (ms == MS_REFILL || ms == MS_REREAD));
 assign m_w0 = m_live && m_cw && !m_ph && ms == MS_IDLE && (m_st ? !wb_full : m_lhit);
 assign m_lmiss = FAST && m_live && m_ld && m_cached && !m_dly && ms == MS_IDLE && !m_ph && !m_dc_hit;
-wire m_commit_e = m_live && m_done;         // (M always advances when done)
+assign m_commit_e = m_live && m_done;       // (M always advances when done)
 wire m_commit = m_commit_e && !m_lmiss;     // (FAST: but a load of the wrong line)
 
 // =============================================================== pipeline advance
@@ -1576,7 +1584,7 @@ wire f_cached = cacheable(f_pc, game_view);
 // mapped at a virtual address whose bits [IW+1:12] differ from the physical ones (the VR4300's cache has this
 // with its two colour bits too); a hit-type cache op on the I-cache then drops the line under every colour (ic_alias).
 typedef struct packed { logic [19:0] vp; logic [11:0] om; logic g; logic [7:0] asid; logic [10:0] pfn; } pg_t;     // (om: a page of the TLB_EN's that is bigger than 4 KiB: the offset bits above 11; 0 for the tables')
-pg_t         pg [2];
+pg_t         pg [0:1];
 logic [1:0]  pg_v;
 logic        pg_mru;                         // the register hit or loaded last
 logic        pg_inv_r;                       // a table write last cycle
@@ -1630,8 +1638,8 @@ always_ff @(posedge clk) begin
     rf_xv <= w_wr; rf_xrd <= w_c.rd; rf_xlo <= w_res;
 end
 generate if (W64) begin : g_hx
-    (* ram_style = "distributed" *) logic [31:0] rf_hx [32];
-    (* ram_style = "distributed" *) logic        rf_hw [32];
+    (* ram_style = "distributed" *) logic [31:0] rf_hx [0:31];
+    (* ram_style = "distributed" *) logic        rf_hw [0:31];
     initial for (int i = 0; i < 32; i++) begin rf_hx[i] = 0; rf_hw[i] = 0; end
     always_ff @(posedge clk) begin
         rfq_ah <= rf_hx[rf_rinsn[25:21]]; rfq_bh <= rf_hx[rf_rinsn[20:16]];
@@ -1841,9 +1849,9 @@ generate if (SNOOP) begin : g_sn
     logic [21:0]   sn_ls;
     logic [DC_LOG2+8:0] c_line;                          // (the index and the nine bits the copy has)
     logic [9:0]    c_q;                                  // the copy's entry at R's index
-    logic [9:0]    sn_dup [DC_LINES];
+    logic [9:0]    sn_dup [0:DC_LINES-1];
     logic [DC_LOG2-1:0] h_idx;
-    (* ram_style = "distributed" *) logic [DC_LOG2-1:0] sn_q [8];      // (not a block RAM of its own)
+    (* ram_style = "distributed" *) logic [DC_LOG2-1:0] sn_q [0:7];    // (not a block RAM of its own)
     logic [2:0]    q_r, q_w;
     logic [3:0]    q_n;
     wire           r_v = sn_ts != sn_seen;
@@ -1946,7 +1954,7 @@ always_ff @(posedge clk) begin
     end else begin
         // ---------------------------------------------------- Count / Compare
         begin
-            logic step;
+            automatic logic step;
             step = SIM_COUNT_RETIRE ? (m_commit || m_take_exc) : 1'b1;
             if (step) begin
                 c0_random <= rnd_dec;
@@ -2092,7 +2100,7 @@ always_ff @(posedge clk) begin
             sh_n <= 7'd32; m_shwait <= 1'b1;                        // (sdl, sdr: the first word is out; the second is the next four bytes)
         end
         else if (m_live && m_xshift) begin
-            logic fill;
+            automatic logic fill;
             fill = m_c.x64 == X_SRA && sh_r[63];
             if (!sh_on) begin
                 sh_r <= m_b64; sh_n <= m_xamt; sh_on <= 1'b1; m_shwait <= m_xamt != 7'd0;
@@ -2441,13 +2449,13 @@ always_ff @(posedge clk) begin
         // XDIV) div(u) on md_acc and one adder.
         if (XMD && !md_dm) md_ac <= '0;                           // (the sum's start, with no wait for M)
         if (m_commit_e && m_is_md && m_c.md != MD_MTHI && m_c.md != MD_MTLO) begin
-            logic sgn, w;
+            automatic logic sgn, w;
             w = XDIV && (m_c.md == MD_DDIV || m_c.md == MD_DDIVU);
             md_w <= w;
             if (FAST && (m_c.md == MD_MULT || m_c.md == MD_MULTU)) begin
                 md_sa <= m_c.md == MD_MULT; md_sb <= m_c.md == MD_MULT; md_m32 <= 1'b1; md_busy <= 1'b1;
             end else if (m_c.md == MD_MULT || m_c.md == MD_MULTU) begin
-                logic [63:0] p;
+                automatic logic [63:0] p;
                 p = m_c.md == MD_MULT ? 64'($signed(m_a_lo) * $signed(m_st_lo)) : 64'(m_a_lo) * 64'(m_st_lo);
                 lo_r <= p[31:0]; hi_r <= p[63:32]; lo_wide <= 0; hi_wide <= 0;
             end else if (XMD && (m_c.md == MD_DMULT || m_c.md == MD_DMULTU)) begin
@@ -2458,7 +2466,7 @@ always_ff @(posedge clk) begin
                 md_dvon <= 1'b1; md_ph <= DV_STEP; md_cnt <= w ? 7'd64 : 7'd32; md_busy <= 1'b1;
                 md_r <= 64'd0; md_nr <= dv_as;
             end else begin
-                logic sa, sb;
+                automatic logic sa, sb;
                 sgn = m_c.md == MD_DIV;
                 sa = sgn && m_a_lo[31]; sb = sgn && m_st_lo[31];
                 md_acc <= {32'd0, sa ? -m_a_lo : m_a_lo};
@@ -2478,7 +2486,7 @@ always_ff @(posedge clk) begin
         end else if (XMD && md_busy && md_dm) begin
             // dmult(u): the products' sum, a word at a time: the low word of the sum of
             // pass 0 is LO's lower, that of passes 1 and 2 (with what passed 0 carried) its upper, ...
-            logic [66:0] t;
+            automatic logic [66:0] t;
             md_c <= md_c + 3'd1;
             t = md_ac + {{2{md_psg2 & md_p2[63]}}, md_psg2 & md_p2[63], md_p2};
             // (the passes' signs, as each is selected)
@@ -2523,14 +2531,14 @@ always_ff @(posedge clk) begin
             endcase
         end else if (!XDIV && md_busy) begin
             if (md_cnt != 0) begin
-                logic [32:0] x, y, t;
+                automatic logic [32:0] x, y, t;
                 x = {1'b0, md_acc[62:31]};
                 y = {1'b0, md_dv};
                 t = x - y;
                 md_acc <= t[32] ? {x[31:0], md_acc[30:0], 1'b0} : {t[31:0], md_acc[30:0], 1'b1};
                 md_cnt <= md_cnt - 7'd1;
             end else begin
-                logic [31:0] q, r;
+                automatic logic [31:0] q, r;
                 md_busy <= 1'b0;
                 q = md_nq ? -md_acc[31:0] : md_acc[31:0];
                 r = md_nr ? -md_acc[63:32] : md_acc[63:32];

@@ -116,7 +116,7 @@ wire [2:0]  l_bank = {l_rank, la_addr[9:8]};
 
 // ---- 8-bank open-page state and saturating cycle timers
 logic [7:0]  open;
-logic [12:0] row [8];
+logic [12:0] row [0:7];
 
 function automatic int imax(input int x, input int y);
     return x > y ? x : y;
@@ -125,7 +125,7 @@ endfunction
 localparam int CW = $clog2(imax(imax(imax(T_RAS, T_IDLE), imax(T_R2W, T_W2R)),
                                 imax(imax(T_RCD, T_RP), T_WR)) + 1);
 
-logic [CW-1:0] c_act [8], c_pre [8], c_wr [8], c_use [8];
+logic [CW-1:0] c_act [0:7], c_pre [0:7], c_wr [0:7], c_use [0:7];
 logic [CW-1:0] c_rd, c_wrany;
 logic          act1_d;
 
@@ -339,7 +339,7 @@ end
 
 // ---- read data return pipeline (RL sys cycles after dfi_rddata_en)
 logic [RL-1:0]   rd_sr;
-logic [TAGW-1:0] tag_sr [RL];
+logic [TAGW-1:0] tag_sr [0:RL-1];
 
 always_ff @(posedge clk) begin
     if (rst) rd_sr <= '0;

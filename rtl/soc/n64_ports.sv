@@ -93,7 +93,7 @@ module port_rdp (
     input  wire         p_ready, p_rvalid,
     input  wire  [31:0] p_rdata
 );
-logic [24:0] q [4];                         // {we, word address}
+logic [24:0] q [0:3];                       // {we, word address}
 logic [2:0]  qw, qr;
 wire  [2:0]  qn = qw - qr;
 assign m_cmd_ready = qn != 3'd4;

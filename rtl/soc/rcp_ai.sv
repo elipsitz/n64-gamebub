@@ -68,17 +68,6 @@ logic        c_v, n_v;                  // the current is loaded (it may be read
 logic [19:0] step;
 assign dac = dac_r;
 assign clr = wr_s && a == 3'd3;
-wire         c_avail = c_v;                 // (a current buffer always has words left: it is dropped at its last)
-// the last word of the current buffer is being fetched: the buffer is gone from, the one queued (if any) is next
-wire         c_end   = st == S_FRD && ack && c_left == 16'd1;
-wire         len_nz  = wd[17:3] != 15'd0;
-
-always_comb begin
-    rd = {14'd0, c_left, 2'b00};
-    if (a == 3'd3) rd = {n_v, c_v, 4'd0, ena, 1'b1, 3'd0, 1'b1, 19'd0, n_v};
-end
-
-// ---------------------------------------------------------------- the reader and the resampler
 typedef enum logic [3:0] {
     S_OFF,      // nothing played: wait for a buffer
     S_PRIME,    // the FIFO's lead: silence up to the target
@@ -93,6 +82,18 @@ typedef enum logic [3:0] {
     S_DRY       // the AI is out of buffers: silence
 } st_t;
 st_t         st;
+
+wire         c_avail = c_v;                 // (a current buffer always has words left: it is dropped at its last)
+// the last word of the current buffer is being fetched: the buffer is gone from, the one queued (if any) is next
+wire         c_end   = st == S_FRD && ack && c_left == 16'd1;
+wire         len_nz  = wd[17:3] != 15'd0;
+
+always_comb begin
+    rd = {14'd0, c_left, 2'b00};
+    if (a == 3'd3) rd = {n_v, c_v, 4'd0, ena, 1'b1, 3'd0, 1'b1, 19'd0, n_v};
+end
+
+// ---------------------------------------------------------------- the reader and the resampler
 logic        have, fnext;               // the first pair has been fetched; the fetch under way is the first's
 logic [20:0] phase;
 logic [15:0] pl, pr, nl, nr;

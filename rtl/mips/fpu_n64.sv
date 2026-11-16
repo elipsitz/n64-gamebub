@@ -64,7 +64,7 @@ module fpu_n64 #(
 );
 
 // ============================================================ registers
-logic [31:0] fe0 [16], fe1 [16], fo0 [16], fo1 [16];   // even / odd banks, one copy per read port
+logic [31:0] fe0 [0:15], fe1 [0:15], fo0 [0:15], fo1 [0:15]; // even / odd banks, one copy per read port
 initial for (int i = 0; i < 16; i++) begin fe0[i] = 0; fe1[i] = 0; fo0[i] = 0; fo1[i] = 0; end
 logic [31:0] qxe, qxo, qye, qyo;                       // pair fs>>1 (port x), pair ft>>1 (port y)
 logic        we_e, we_o; logic [3:0] widx; logic [31:0] wd_e, wd_o;
@@ -189,18 +189,6 @@ fbits_t up_raw;
 assign up_raw = FAST ? (upy ? ay : ax) : upy ? rft : rfs;
 wire [31:0] up_lo = FAST ? (upy ? ay : ax) : upy ? ye : xe;
 wire [31:0] up_hi = FAST ? (upy ? ir : zmag) : upy ? yo : xo;
-fbits_t up;
-// (a single's compare takes its operands as they are: the VR4300 orders a denormal exactly there, and does not trap on
-// it -- software tests a pointer kept in a float register against 0.0, and KSEG0's below 8 MiB are all denormals)
-wire cmp_s = !sel_d && fn[5:4] == 2'b11;
-// (FAST: only a double's, in S_UNPX and S_UNPY; d2f's result has no zero exponent but the flushed {sign, 0}: the normal range's
-// exponent is 1 to 254 before the rounding adds at most 1 to it)
-assign up = FAST ? d2f(up_lo, up_hi) : (sel_w || sel_l || cmp_s) ? up_raw : ftz(sel_d ? d2f(up_lo, up_hi) : up_raw);
-
-// (FAST: without `live` -- the core asks only for an instruction in M, and
-// one that is not live is flushed)
-// (FAST: whether M's instruction goes through the datapath, from a register that takes the next
-// one's decode as it enters -- the stall that this makes would otherwise have the decode in front of it)
 function automatic logic arith_of(input logic [31:0] i);
     logic cop1, s_, d_, w_;
     cop1 = i[31:26] == 6'h11;
@@ -216,6 +204,19 @@ always_ff @(posedge clk) if (adv) begin
     isl_q <= insn_e[31:26] == 6'h11 && insn_e[25:21] == 5'h15;
 end
 wire sel_d = FAST ? isd_q : is_d, sel_w = FAST ? isw_q : is_w, sel_l = FAST ? isl_q : is_l;
+
+fbits_t up;
+// (a single's compare takes its operands as they are: the VR4300 orders a denormal exactly there, and does not trap on
+// it -- software tests a pointer kept in a float register against 0.0, and KSEG0's below 8 MiB are all denormals)
+wire cmp_s = !sel_d && fn[5:4] == 2'b11;
+// (FAST: only a double's, in S_UNPX and S_UNPY; d2f's result has no zero exponent but the flushed {sign, 0}: the normal range's
+// exponent is 1 to 254 before the rounding adds at most 1 to it)
+assign up = FAST ? d2f(up_lo, up_hi) : (sel_w || sel_l || cmp_s) ? up_raw : ftz(sel_d ? d2f(up_lo, up_hi) : up_raw);
+
+// (FAST: without `live` -- the core asks only for an instruction in M, and
+// one that is not live is flushed)
+// (FAST: whether M's instruction goes through the datapath, from a register that takes the next
+// one's decode as it enters -- the stall that this makes would otherwise have the decode in front of it)
 assign busy = FAST ? ar_q && st != S_DONE : live && is_arith && st != S_DONE;
 
 // ------------------------------------------------------------ shared pieces
@@ -544,7 +545,7 @@ always_ff @(posedge clk) begin
         // abs, neg (the result is res's, written in this state) and the compares are done from here as well
         if (fn == 6'h05 || fn == 6'h07 || cvt_mv) begin kind <= K_MOVE; st <= S_DONE; end
         if (fn >= 6'h30) begin
-            logic un, eq, lt;
+            automatic logic un, eq, lt;
             un = isnan(ax) || isnan(ay);
             eq = !un && ((iszero(ax) && iszero(ay)) || (pre_eq && ax.s == ay.s));
             lt = !un && !(iszero(ax) && iszero(ay)) && (ax.s != ay.s ? ax.s : (ax.s ? !pre_lt && !pre_eq : pre_lt));
@@ -554,7 +555,7 @@ always_ff @(posedge clk) begin
         end
     end
     S_DECIDE: begin
-        logic nx, ny, ix, iy, zx, zy;
+        automatic logic nx, ny, ix, iy, zx, zy;
         nx = FAST ? fnx : isnan(ax); ny = FAST ? fny : isnan(ay); ix = FAST ? fix : isinf(ax); iy = FAST ? fiy : isinf(ay);
         zx = FAST ? fzx : iszero(ax); zy = FAST ? fzy : iszero(ay);
         st <= S_DONE;                                     // (the special cases: done now)
@@ -568,7 +569,7 @@ always_ff @(posedge clk) begin
             kind <= K_CVT; zs <= ax.s; zst <= 0;
             if (ax != 32'd0) st <= S_NORM;
         end else if (!FAST && fn >= 6'h30) begin          // c.cond (FAST: S_PRE's)
-            logic un, eq, lt;
+            automatic logic un, eq, lt;
             un = nx || ny;
             eq = !un && ((zx && zy) || (FAST ? fmeq && ax.s == ay.s : ax == ay));
             lt = !un && !(zx && zy) && (ax.s != ay.s ? ax.s : (ax.s ? (FAST ? !fmlt && !fmeq : {ax.e, ax.f} > {ay.e, ay.f}) : (FAST ? fmlt : {ax.e, ax.f} < {ay.e, ay.f})));
@@ -579,7 +580,8 @@ always_ff @(posedge clk) begin
             if (!FAST && !nx && ax.e < 8'd158 && !zx) st <= S_F2W;       // (FAST: S_PRE's)
         end else case (fn)
         6'h00, 6'h01: begin                               // add, sub: order by magnitude
-            logic sy; fbits_t y;
+            automatic logic sy;
+            automatic fbits_t y;
             y = ay; y.s = ay.s ^ fn[0]; sy = y.s;
             kind <= K_ADD;
             if (!FAST && !(nx || ny || ix || iy || zx || zy)) begin       // (FAST: S_PRE's)
@@ -638,7 +640,8 @@ always_ff @(posedge clk) begin
         if (icnt == 5'd0) st <= S_NORM;
     end
     S_NORM: begin
-        logic [31:0] m; logic sti;
+        automatic logic [31:0] m;
+        automatic logic sti;
         if (kind == K_MUL) begin m = mprod[47:16]; sti = mprod[15:0] != 0; end
         else if (kind == K_DIV || kind == K_SQRT) begin m = zmag; sti = ir != 0; end
         else begin m = zmag; sti = zst; end

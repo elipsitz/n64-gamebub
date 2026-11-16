@@ -488,7 +488,7 @@ always_ff @(posedge pad_clk) if (pad_we) pad_ram[pad_wa] <= pad_wd;
 always_ff @(posedge clk) pad_q <= pad_ram[a[5:2]];
 // The rest: the map's banks are a[11:8], a register's word in its bank a[5:2] (a[15:12] and a[7:6] are 0 for every register).
 // An address that names no register reads 0.
-logic [31:0] rb [16];
+logic [31:0] rb [0:15];
 always_comb begin
     for (int k = 0; k < 16; k++) rb[k] = 32'd0;
     case (a[5:2])                                               // APF_AUDIO
