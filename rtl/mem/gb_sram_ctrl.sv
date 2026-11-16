@@ -14,10 +14,11 @@
 //       UB (`sram_io[15:8]`, `writeMaskN[1]`) = byte 2 `[15:8]`  (`be[1]`)
 //       LB (`sram_io[7:0]`,  `writeMaskN[0]`) = byte 3 `[7:0]`   (`be[0]`)
 //
-// Hardware AC timing on `clk2x` IOB output flip-flops:
+// Hardware AC timing on `clk2x` IOB output & input flip-flops:
 //   - Reads: each 16-bit halfword holds `ceN=0, oeN=0, weN=1, writeMaskN=2'b00`
-//     steady on the pins for 2 `clk2x` cycles (16.0 ns >= 10.0 ns tAA) before
-//     sampling `sram_dataIn` (2 `clk` cycles of SRAM bus occupancy per 32b read).
+//     steady on the pins for 4 `clk2x` cycles (32.0 ns total: 24.0 ns launch-to-
+//     ILOGICE2.IFF `sram_in_q` capture + 8.0 ns hold margin, giving > +9.0 ns
+//     physical setup slack over `OLOGICE2 + 10 ns tAA + ILOGICE2`).
 //   - Writes: each active halfword (`half_be != 2'b00`) executes 4 `clk2x`
 //     subcycles (32.0 ns; inactive halfwords with `half_be == 2'b00` are skipped):
 //       Subcycle 0 ( 8 ns): `ceN=0, oeN=1, weN=1, dataDir=1`, address/data/mask setup
@@ -93,9 +94,11 @@ typedef enum logic [3:0] {
     S_INIT0,
     S_INIT1,
     S_IDLE,
-    S_RD0,      // drive half 0 ({addr, 0}) for 16 ns
-    S_RD1,      // sample half 0, drive half 1 ({addr, 1}) for 16 ns
-    S_RD_CAP,   // sample half 1, return pads to idle
+    S_RD0_A,    // drive half 0 ({addr, 0}) first 16 ns
+    S_RD0_B,    // hold  half 0 ({addr, 0}) second 16 ns (ILOGICE2 captures at 24 ns)
+    S_RD1_A,    // latch rx_hi from sram_in_q, drive half 1 ({addr, 1}) first 16 ns
+    S_RD1_B,    // hold  half 1 ({addr, 1}) second 16 ns (ILOGICE2 captures at 24 ns)
+    S_RD_CAP,   // latch rx_lo from sram_in_q, return pads to idle
     S_WR0_A,    // half 0 subcycle 0 (setup, weN=1) + subcycle 1 (weN=0)
     S_WR0_B,    // half 0 subcycle 2 (weN=0) + subcycle 3 (hold, weN=1)
     S_WR1_A,    // half 1 subcycle 0 (setup, weN=1) + subcycle 1 (weN=0)
@@ -178,7 +181,7 @@ always_ff @(posedge clk) begin
                     r_be    <= win_be;
                     if (!win_we) begin
                         r_last_half <= 1'b0;
-                        st          <= S_RD0;
+                        st          <= S_RD0_A;
                     end else if (win_be[3:2] != 2'b00) begin
                         r_last_half <= 1'b0;
                         st          <= S_WR0_A;
@@ -190,11 +193,17 @@ always_ff @(posedge clk) begin
                     end
                 end
             end
-            S_RD0: begin
-                r_last_half <= 1'b1;
-                st          <= S_RD1;
+            S_RD0_A: begin
+                st <= S_RD0_B;
             end
-            S_RD1: begin
+            S_RD0_B: begin
+                r_last_half <= 1'b1;
+                st          <= S_RD1_A;
+            end
+            S_RD1_A: begin
+                st <= S_RD1_B;
+            end
+            S_RD1_B: begin
                 st <= S_RD_CAP;
             end
             S_RD_CAP: begin
@@ -250,7 +259,7 @@ always_comb begin
     nxt_dout   = r_last_half ? r_wdata[15:0] : r_wdata[31:16];
 
     case (st)
-        S_RD0: begin
+        S_RD0_A, S_RD0_B: begin
             nxt_ce_n   = 1'b0;
             nxt_oe_n   = 1'b0;
             nxt_we_n   = 1'b1;
@@ -258,7 +267,7 @@ always_comb begin
             nxt_mask_n = 2'b00;
             nxt_addr   = {r_addr, 1'b0};
         end
-        S_RD1: begin
+        S_RD1_A, S_RD1_B: begin
             nxt_ce_n   = 1'b0;
             nxt_oe_n   = 1'b0;
             nxt_we_n   = 1'b1;
@@ -313,6 +322,12 @@ always_ff @(posedge clk2x) begin
 end
 assign sram_address = addr_q;
 
+// Non-reset, non-CE dedicated input FFs for sram_dataIn (packs into Artix-7 ILOGICE2.IFF, ~1.48 ns pad-to-FF)
+(* IOB = "TRUE" *) logic [15:0] sram_in_q = 16'h0000;
+always_ff @(posedge clk2x) begin
+    sram_in_q <= sram_dataIn;
+end
+
 // Dedicated output FFs (zero internal readback) for dataOut, per-bit tristate (T), and control signals.
 // `dout_q` (OLOGICE2.OUTFF) and `tri_q_bit` (OLOGICE2.TFF) share `rst2x` for 7-Series OLOGICE2 co-packing.
 (* IOB = "TRUE" *)                      logic [15:0] dout_q    = 16'h0000;
@@ -343,12 +358,12 @@ always_ff @(posedge clk2x) begin
         dir_q     <= nxt_dir;
         mask_n_q  <= nxt_mask_n;
 
-        // Sample half 0 after 16 ns (at transition from S_RD0 to S_RD1 on pads)
-        if (st == S_RD1 && !phase_sel)
-            rx_hi <= sram_dataIn;
-        // Sample half 1 after 16 ns (at transition from S_RD1 to idle on pads)
+        // Transfer half 0 from ILOGICE2.IFF (captured after 24 ns on pins) as pads switch to half 1
+        if (st == S_RD1_A && !phase_sel)
+            rx_hi <= sram_in_q;
+        // Transfer half 1 from ILOGICE2.IFF (captured after 24 ns on pins) as pads return to idle
         if (st == S_RD_CAP && !phase_sel)
-            rx_lo <= sram_dataIn;
+            rx_lo <= sram_in_q;
     end
 end
 

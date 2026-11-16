@@ -173,7 +173,8 @@ wire [25:0] dfi_addr;
 wire        dfi_wren, dfi_rden, dfi_rv;
 wire [31:0] dfi_wd, dfi_rd;
 
-wire _unused_ok = &{1'b0, rd_next, rd_next_tag};
+wire [15:0] sdram_dq_tri_unused, sram_data_tri_unused;
+wire _unused_ok = &{1'b0, rd_next, rd_next_tag, sdram_dq_tri_unused, sram_data_tri_unused};
 
 sdr_arb_gb #(
     .N(6),
@@ -273,6 +274,7 @@ sdr_phy_x7 u_phy (
     .sdram_dq_in  (sdram_dq_in),
     .sdram_dq_out (sdram_dq_out),
     .sdram_dq_oe  (sdram_dq_oe),
+    .sdram_dq_tri (sdram_dq_tri_unused),
     .sdram_clock  (sdram_clock)
 );
 
@@ -322,7 +324,8 @@ gb_sram_ctrl u_sram (
     .sram_address    (sram_address),
     .sram_dataIn     (sram_dataIn),
     .sram_dataOut    (sram_dataOut),
-    .sram_dataDir    (sram_dataDir)
+    .sram_dataDir    (sram_dataDir),
+    .sram_dataTri    (sram_data_tri_unused)
 );
 
 // ---- L1 + L2 PI ROM Cache
