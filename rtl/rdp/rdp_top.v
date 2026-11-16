@@ -303,15 +303,34 @@ module rdp_top (
     // (a negative one's complement, 15 bits), the place of its top set bit + 1 (docs/rdp_exact.md, rule 4)
     reg  [12:0] sdy [0:3];
     reg  [3:0]  dzc_r;
+    reg  [31:0] vgx, vde, vval;
+    reg  [31:0] zdy;
+    reg  [2:0]  cp_m_q;
+    reg  [9:0]  px_cnt;
     wire [14:0] dzc_a = vgx[31] ? ~vgx[30:16] : vgx[30:16];
     wire [14:0] dzc_b = zdy[31] ? ~zdy[30:16] : zdy[30:16];
     wire [15:0] dzc_s = {1'b0, dzc_a} + {1'b0, dzc_b};
     reg  [3:0]  dzc_p;
-    integer dzi;
-    always @* begin
-        dzc_p = 4'd0;
-        if (dzc_s[15:14] != 2'b00) dzc_p = 4'd15;
-        else for (dzi = 13; dzi >= 0; dzi = dzi - 1) if (dzc_s[dzi] && dzc_p == 4'd0) dzc_p = dzi[3:0] + 4'd1;
+    always @(*) begin
+        casez (dzc_s)
+            16'b1???_????_????_????,
+            16'b01??_????_????_????: dzc_p = 4'd15;
+            16'b001?_????_????_????: dzc_p = 4'd14;
+            16'b0001_????_????_????: dzc_p = 4'd13;
+            16'b0000_1???_????_????: dzc_p = 4'd12;
+            16'b0000_01??_????_????: dzc_p = 4'd11;
+            16'b0000_001?_????_????: dzc_p = 4'd10;
+            16'b0000_0001_????_????: dzc_p = 4'd9;
+            16'b0000_0000_1???_????: dzc_p = 4'd8;
+            16'b0000_0000_01??_????: dzc_p = 4'd7;
+            16'b0000_0000_001?_????: dzc_p = 4'd6;
+            16'b0000_0000_0001_????: dzc_p = 4'd5;
+            16'b0000_0000_0000_1???: dzc_p = 4'd4;
+            16'b0000_0000_0000_01??: dzc_p = 4'd3;
+            16'b0000_0000_0000_001?: dzc_p = 4'd2;
+            16'b0000_0000_0000_0001: dzc_p = 4'd1;
+            default:                 dzc_p = 4'd0;
+        endcase
     end
     wire        lpass = !pix_valid;
     wire        rflip = op == 6'h25;
@@ -480,7 +499,6 @@ module rdp_top (
     // the command waiting is a triangle that draws: it may start while the primitive before drains
     wire       tri_early = n_tri && cimg_ok && !(cimg32 && cyc == 2'd2);
     reg [4:0]  mi;                  // multiplier sequence index
-    reg  [2:0] cp_m_q;           // the place in its group of the pixel issued (copy mode)
     reg        kind_tri, kind_texrect, kind_fillmode, kind_rect;   // what is being drawn
     reg signed [11:0] y, y0r, ymr, yb;
     reg signed [11:0] ry0;         // rect / texrect top row
@@ -492,10 +510,6 @@ module rdp_top (
     // words on, their fractions; Z as four whole words.
     reg [2:0]  vi;
     reg [3:0]  vs;
-    reg [31:0] vgx, vde, vval;
-    // Z's DzDy too (the walker has no use for it): with DzDx, the console's dz code of the primitive (dzc_p), which the
-    // pixel's depth compare and the depth word keep (rdp_pix)
-    reg [31:0] zdy;
     reg [2:0]  tflags;              // the triangle's shade / texture / z
     // A triangle's setup runs while the primitive before drains (S_FIN): what the pixel pipeline reads of it -- the flags,
     // the tile, the LOD's walk and level count, the depth's dz code -- waits here (n_*, dzc_n) until its first span (cmt:
@@ -555,7 +569,6 @@ module rdp_top (
     assign par = !cimg8 && !cimg32 && crow[1];
     assign xsp = xs + {9'd0, par_c};
     assign xep = xe + {10'd0, par_c};
-    reg [9:0]  px_cnt;
     // loads (lang/c/rdp/rdp.c load_block, load_tlut, load_tile_n64)
     reg [9:0]  tt, tt1;             // LOAD TILE's rows
     reg [22:0] l_ti;                // the row's first texel in the image (t * width + s)
@@ -643,21 +656,17 @@ module rdp_top (
     // stays in the pixel): so each pixel need only be compared for equality
     // with the ends, and two flags say whether the span has passed them.
     wire [9:0]  aa_px = xs + px_cnt;
-    reg  [3:0]  aa_cj [0:3];
-    reg  [3:0]  aa_eql, aa_eqr;
-    integer jj;
-    always @(*) begin
-        for (jj = 0; jj < 4; jj = jj + 1) begin
-            aa_eql[jj] = aa_px == pc_lp[10*jj +: 10];
-            aa_eqr[jj] = aa_px == pc_rp[10*jj +: 10];
-            aa_cj[jj] = 4'd0;
-            if (pc_v[jj]) begin
-                if (aa_eql[jj]) aa_cj[jj] = aa_eqr[jj] ? (pc_lm[4*jj +: 4] & pc_rm[4*jj +: 4]) : pc_lm[4*jj +: 4];
-                else if (aa_eqr[jj]) aa_cj[jj] = pc_rm[4*jj +: 4];
-                else if (aa_pl[jj] && !aa_pr[jj]) aa_cj[jj] = jj[0] ? 4'h5 : 4'hA;
-            end
-        end
-    end
+    wire [3:0]  aa_cj [0:3];
+    wire [3:0]  aa_eql, aa_eqr;
+    genvar jj;
+    generate for (jj = 0; jj < 4; jj = jj + 1) begin : aa_sub_cov
+        assign aa_eql[jj] = aa_px == pc_lp[10*jj +: 10];
+        assign aa_eqr[jj] = aa_px == pc_rp[10*jj +: 10];
+        assign aa_cj[jj]  = !pc_v[jj] ? 4'd0
+                          : aa_eql[jj] ? (aa_eqr[jj] ? (pc_lm[4*jj +: 4] & pc_rm[4*jj +: 4]) : pc_lm[4*jj +: 4])
+                          : aa_eqr[jj] ? pc_rm[4*jj +: 4]
+                          : (aa_pl[jj] && !aa_pr[jj]) ? ((jj % 2 != 0) ? 4'h5 : 4'hA) : 4'd0;
+    end endgenerate
     wire [7:0]  aa_mask = {aa_cj[0] | aa_cj[1], aa_cj[2] | aa_cj[3]};
     // the span: the subscanlines' union, its end to the scissor
     wire [10:0] aa_xe = ({1'b0, aa_max} + 11'd1 < {1'b0, sc_x1}) ? {1'b0, aa_max} + 11'd1 : {1'b0, sc_x1};
@@ -886,7 +895,7 @@ module rdp_top (
             old_hold[0] <= 5'd0; old_hold[1] <= 5'd0;
             sync_count <= 0; load_count <= 0; unknown_ops <= 0;
             other_h <= 0; other_l <= 0; cc_hi <= 0; cc_lo <= 0;
-            fill <= 0; fog <= 0; blend <= 0; prim <= 0; env <= 0; prim_lod_frac <= 0; k4 <= 0; k5 <= 0; cv_k03 <= 0; prim_z <= 0;
+            fill <= 0; fog <= 0; blend <= 0; prim <= 0; env <= 0; prim_lod_frac <= 0; k4 <= 0; k5 <= 0; cv_k03 <= 0; prim_z <= 0; prim_dz <= 0;
             sc_xh <= 0; sc_yh <= 0; sc_xl <= 12'd4092; sc_yl <= 12'd4092; sc_field <= 1'b0; sc_odd <= 1'b0;
             cimg <= 0; zimg <= 0; timg <= 0; cimg_width <= 11'd1; timg_width <= 11'd1;
             timg_size <= 2'd0; cimg_ok <= 1'b0; cimg8 <= 1'b0; cimg32 <= 1'b0;

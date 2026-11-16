@@ -51,7 +51,7 @@ logic [23:0] end_pend;
 logic [21:0] fp;                            // the next word to ask for (word address; one more bit: END's)
 logic [2:0]  out;                           // reads asked for, not yet back
 // words back, waiting to be taken: four
-logic [31:0] q [4];
+logic [31:0] q [0:3];
 logic [2:0]  qw, qr;
 wire  [2:0]  qn = qw - qr;
 // busy: commands between CURRENT and END -- END behind CURRENT is nothing to do, not a run all the way

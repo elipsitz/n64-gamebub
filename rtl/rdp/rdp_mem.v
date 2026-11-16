@@ -339,12 +339,14 @@ module rdp_mem (
 
     // pixel range of a word: the byte lanes of its even pixel ([3:2]) and its odd one
     function automatic [3:0] range_sel;
-        input [8:0] w;
+        input [8:0]  w;
+        input [9:0]  x0;
+        input [10:0] x1;
         reg [10:0] xe;   // even pixel of the word
         begin
             xe = {1'b0, w, 1'b0};
-            range_sel = { {2{xe >= {1'b0, w_x0} && xe < w_x1}},
-                          {2{(xe + 11'd1) >= {1'b0, w_x0} && (xe + 11'd1) < w_x1}} };
+            range_sel = { {2{xe >= {1'b0, x0} && xe < x1}},
+                          {2{(xe + 11'd1) >= {1'b0, x0} && (xe + 11'd1) < x1}} };
         end
     endfunction
     wire [31:0] h_hold  = rf_head[79:48];
@@ -359,7 +361,7 @@ module rdp_mem (
     wire [1:0]  h_zmask = rf_head[1:0];
     wire [1:0]  h_cmask = rf_head[1:0];
     // (a 32-bit colour word is a pixel of the span: all four bytes by its pass bit, the entry's bit 19)
-    wire [3:0]  h_range = w_wide ? 4'hF : range_sel(h_idx[8:0]);
+    wire [3:0]  h_range = w_wide ? 4'hF : range_sel(h_idx[8:0], w_x0, w_x1);
     wire [3:0]  h_csel  = w_pz ? 4'd0 : w_fillm ? h_range : w_wide ? {4{h_cd36[19]}}
                         : (h_range & { {2{h_cmask[0]}}, {2{h_cmask[1]}} });
     wire [3:0]  h_zsel  = !w_pz ? 4'd0 : (h_range & { {2{h_zmask[0]}}, {2{h_zmask[1]}} });
@@ -378,6 +380,8 @@ module rdp_mem (
     // 16 and 0), each quad touched enabled
     // the write command's word address: one adder for the colour and the depth span (the group's hidden word is addressed from
     // its pass's image's base)
+    wire        h_c     = h_v && h_ph == 2'd0 && h_csel != 4'd0;           // the head's colour word is to go
+    wire        h_zz    = h_v && h_ph == 2'd0 && h_zsel != 4'd0;           // ... or (the second pass) its Z word
     wire [29:0] h_wa    = (w_pz ? w_zb : w_cb) + (w_c8 && h_c ? {21'd0, h_idx[9:1]} : {20'd0, h_idx});
     wire [2:0]  h_j     = (w_pz ? w_zb[2:0] : w_cb[2:0]) + h_idx[2:0];
     wire        h_first = h_j == 3'd0 || h_idx == {1'b0, w_x0[9:1]};
@@ -389,8 +393,6 @@ module rdp_mem (
     wire [3:0]  h_qbe   = (h_first ? 4'd0 : hbe) | (4'd1 << h_j[2:1]);
     wire        h_any   = (w_pz || (!w_pz && !w_c8 && !w_c32)) && ((h_first ? 1'b0 : hany) | (h_sel != 4'd0));
     wire        h_last  = h_j == 3'd7 || h_idx == w_lastw;
-    wire        h_c     = h_v && h_ph == 2'd0 && h_csel != 4'd0;           // the head's colour word is to go
-    wire        h_zz    = h_v && h_ph == 2'd0 && h_zsel != 4'd0;           // ... or (the second pass) its Z word
     // the shadow plane: a byte for each pixel, so a plane word is for two colour words, the pair (even, odd) by the word's address. It is
     // written with the pair's second word (or the span's last, when that is the even one), with the bytes of the pixels written: the
     // first word's held in s_pd, s_pe from its own turn

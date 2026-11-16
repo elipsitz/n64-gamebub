@@ -347,6 +347,7 @@ module rdp_pix (
     reg  [1:0]  y0;                  // the row's low bits (a row's last pixels are still in the pipe when the next row's y is issued)
     reg         g0;                  // a ghost (LOD)
     reg         dup0, ph0;           // two_pass, LOD: the pixel in these registers a second clock (its second pass); ph0 marks that clock
+    reg  [2:0]  m0r, m1r, m2r, m3r, m4r; // (copy mode's place in the group, with S, T from P0 to P4)
     always @(posedge clk) begin
         dup0 <= in_valid & (two_pass | lod_on) & ~rst;
         v0 <= (in_valid | dup0) & ~rst;
@@ -405,14 +406,16 @@ module rdp_pix (
     // (its pixels reach P5 D clocks late: the pointers make the delay, nothing chooses between two paths). Two M10K
     // where the stages' registers were (and Quartus's shift registers made of them).
     wire [17:0] depth_c = (z_src_p || !p_zbuf) ? {prim_z, 2'b00} : dz;
-    reg  [3:0]  sb_wa;
+    reg  [3:0]  sb_wa = 4'd0;
     wire [3:0]  sb_ra = sb_wa - (lod_on ? (lod_lft ? 4'd14 : 4'd13) : 4'd9);
     (* ram_style = "block" *) reg [71:0] sb_ram [0:15];
     reg  [71:0] sb_q;
+    integer sbi;
+    initial for (sbi = 0; sbi < 16; sbi = sbi + 1) sb_ram[sbi] = 72'd0;
     always @(posedge clk) begin
         sb_ram[sb_wa] <= {hp0, x0, bs0, shade0, depth_c, cvg0, y0};
         sb_q <= sb_ram[sb_ra];
-        sb_wa <= sb_wa + 4'd1;
+        sb_wa <= rst ? 4'd0 : (sb_wa + 4'd1);
     end
     wire [9:0]  x8b     = sb_q[70:61];
     wire        hp8b    = sb_q[71];
@@ -432,11 +435,24 @@ module rdp_pix (
     // reciprocal and a slope, the 8 after them step along it (rdp_div_rom: the console's two tables)
     wire [14:0] wi0 = w0r[30:16];
     reg  [3:0]  sh_c;
-    integer k;
     always @(*) begin
-        sh_c = 4'd14;
-        for (k = 0; k <= 14; k = k + 1)
-            if (wi0[k]) sh_c = 4'd14 - k[3:0];
+        casez (wi0)
+            15'b1??_????_????_????: sh_c = 4'd0;
+            15'b01?_????_????_????: sh_c = 4'd1;
+            15'b001_????_????_????: sh_c = 4'd2;
+            15'b000_1???_????_????: sh_c = 4'd3;
+            15'b000_01??_????_????: sh_c = 4'd4;
+            15'b000_001?_????_????: sh_c = 4'd5;
+            15'b000_0001_????_????: sh_c = 4'd6;
+            15'b000_0000_1???_????: sh_c = 4'd7;
+            15'b000_0000_01??_????: sh_c = 4'd8;
+            15'b000_0000_001?_????: sh_c = 4'd9;
+            15'b000_0000_0001_????: sh_c = 4'd10;
+            15'b000_0000_0000_1???: sh_c = 4'd11;
+            15'b000_0000_0000_01??: sh_c = 4'd12;
+            15'b000_0000_0000_001?: sh_c = 4'd13;
+            default:                sh_c = 4'd14;
+        endcase
     end
     wire [14:0] wn = wi0 << sh_c;
     wire [14:0] dv_pt;
@@ -471,7 +487,6 @@ module rdp_pix (
     reg [9:0]  sl1;
     reg [7:0]  f1;
     reg [3:0]  sh1;
-    reg [2:0]  m0r, m1r, m2r, m3r, m4r;   // (copy mode's place in the group, with S, T from P0 to P4)
     reg [15:0] s1r, t1r;
     always @(posedge clk) begin
         v1 <= v0 & ~rst; ph1 <= ph0; g1 <= g0;
@@ -518,9 +533,11 @@ module rdp_pix (
     // top, here 29 + m down to 16 + R -- as a mask of bits 31:16)
     wire [1:0]  rm2 = tk3(sh2);
     wire [4:0]  rr2 = 5'd13 - {1'b0, sh2} + {3'd0, rm2};
-    reg  [15:0] rk2;
-    integer kk;
-    always @(*) for (kk = 0; kk < 16; kk = kk + 1) rk2[kk] = kk >= rr2 && kk <= 13 + rm2;
+    wire [15:0] rk2;
+    genvar kk;
+    generate for (kk = 0; kk < 16; kk = kk + 1) begin : rk2_gen
+        assign rk2[kk] = (kk >= rr2) && (kk <= (5'd13 + {3'd0, rm2}));
+    end endgenerate
     reg        v3;
     reg signed [32:0] ps3, pt3;
     reg [2:0]  rq3;
@@ -580,9 +597,11 @@ module rdp_pix (
     reg  [15:0] s4, t4;
     reg  [16:0] s17_4, t17_4;       // the LOD's S, T (s11.5) of this perspective divide
     reg         oob4;               // ... out of range (n64_div)
-    reg  [3:0]  rw_a;               // st_ram's, sb_ram's and lf_ram's write address: every clock
+    reg  [3:0]  rw_a = 4'd0;        // st_ram's, sb_ram's and lf_ram's write address: every clock
     reg  [31:0] st_q;
     (* ram_style = "block" *) reg [31:0] st_ram [0:15];
+    integer sti;
+    initial for (sti = 0; sti < 16; sti = sti + 1) st_ram[sti] = 32'd0;
     wire        l3_v;
     // (P4 loads a pixel's first pass at D, its second at D + 1: read at D - 2 and D - 1, the second in L3's clock)
     wire [3:0]  st_ra = rw_a - (lod_lft ? 4'd4 : 4'd3) - {3'd0, l3_v};
@@ -594,7 +613,7 @@ module rdp_pix (
         oob4 <= lod_pp && (wle3 || dvs[18] || dvs[17] || dvt[18] || dvt[17]);
         st_ram[rw_a] <= {s4n, t4n};
         st_q <= st_ram[st_ra];
-        rw_a <= rw_a + 4'd1;
+        rw_a <= rst ? 4'd0 : (rw_a + 4'd1);
     end
 
     // ======================================================================
@@ -689,10 +708,10 @@ module rdp_pix (
     // on a DSP block -- v * 2^k >>> 10, k = 10 - shift, or 26 - shift -- instead of a barrel shifter
     function automatic [15:0] tc_pow;
         input [3:0] shift;
-        reg [3:0] k;
+        reg [4:0] k;
         begin
-            k = (shift <= 4'd10) ? 4'd10 - shift : 4'd10 + 4'd16 - shift;
-            tc_pow = 16'd1 << k;
+            k = (shift <= 4'd10) ? {1'b0, 4'd10 - shift} : (5'd26 - {1'b0, shift});
+            tc_pow = 16'd1 << k[3:0];
         end
     endfunction
     wire signed [33:0] tcp_s = $signed(s4) * $signed({1'b0, tc_pow(t_shifts)});
@@ -832,15 +851,17 @@ module rdp_pix (
     function automatic [7:0] tl_idx;
         input [15:0] v;
         input [1:0]  sl;
+        input        sz1, sz0;
+        input [3:0]  pal;
         reg [3:0] n;
         begin
             n = sl == 2'd0 ? v[15:12] : sl == 2'd1 ? v[11:8] : sl == 2'd2 ? v[7:4] : v[3:0];
-            tl_idx = u8_size1 ? v[15:8] : u8_size0 ? (sl[0] ? v[7:0] : v[15:8]) : {u8_pal, n};
+            tl_idx = sz1 ? v[15:8] : sz0 ? (sl[0] ? v[7:0] : v[15:8]) : {pal, n};
         end
     endfunction
-    assign tl_a0 = tl_idx(tm_q0, sl0_8);
-    assign tl_a1 = tl_idx(tm_q1, sl1_8);
-    assign tl_a2 = tl_idx(tm_q2, sl2_8);
+    assign tl_a0 = tl_idx(tm_q0, sl0_8, u8_size1, u8_size0, u8_pal);
+    assign tl_a1 = tl_idx(tm_q1, sl1_8, u8_size1, u8_size0, u8_pal);
+    assign tl_a2 = tl_idx(tm_q2, sl2_8, u8_size1, u8_size0, u8_pal);
 
     // P8t: the words held while the TLUT is read
     reg        v8t;
@@ -973,6 +994,8 @@ module rdp_pix (
     // first pass at P5 to P9; lf holds for both passes)
     reg  [8:0]  lf_q, lf9, lf10a, lf10;
     (* ram_style = "block" *) reg [8:0] lf_ram [0:15];
+    integer lfi;
+    initial for (lfi = 0; lfi < 16; lfi = lfi + 1) lf_ram[lfi] = 9'd0;
     always @(posedge clk) begin
         lf_ram[rw_a] <= lf;
         lf_q <= lf_ram[rw_a - 4'd5];
@@ -1209,9 +1232,24 @@ module rdp_pix (
     reg  [3:0] dzenc, dzhbp;
     always @(posedge clk) begin : dz_calc       // (static: the primitive's)
         reg [3:0] hb;
-        integer q;
-        hb = 4'd0;
-        for (q = 1; q < 16; q = q + 1) if (prim_dz[q]) hb = q[3:0];
+        casez (prim_dz)
+            16'b1???_????_????_????: hb = 4'd15;
+            16'b01??_????_????_????: hb = 4'd14;
+            16'b001?_????_????_????: hb = 4'd13;
+            16'b0001_????_????_????: hb = 4'd12;
+            16'b0000_1???_????_????: hb = 4'd11;
+            16'b0000_01??_????_????: hb = 4'd10;
+            16'b0000_001?_????_????: hb = 4'd9;
+            16'b0000_0001_????_????: hb = 4'd8;
+            16'b0000_0000_1???_????: hb = 4'd7;
+            16'b0000_0000_01??_????: hb = 4'd6;
+            16'b0000_0000_001?_????: hb = 4'd5;
+            16'b0000_0000_0001_????: hb = 4'd4;
+            16'b0000_0000_0000_1???: hb = 4'd3;
+            16'b0000_0000_0000_01??: hb = 4'd2;
+            16'b0000_0000_0000_001?: hb = 4'd1;
+            default:                 hb = 4'd0;
+        endcase
         dzenc <= z_src_p ? {|prim_dz[15:8], |(prim_dz & 16'hF0F0), |(prim_dz & 16'hCCCC), |(prim_dz & 16'hAAAA)} : p_zbuf ? dzc_x : 4'd0;
         dzhbp <= z_src_p ? hb : p_zbuf ? dzc_x : 4'd0;
     end
@@ -1576,15 +1614,17 @@ module rdp_pix (
     function automatic [7:0] bl_out;
         input [13:0] sum;
         input [7:0]  p, m;
+        input [17:0] rc;
+        input        clr, bl, dv;
         reg   [29:0] q;
         begin
-            q = sum[13:2] * frc;
-            bl_out = fclr ? m : !fblend ? p : fdiv ? q[24:17] : sum[12:5];
+            q = sum[13:2] * rc;
+            bl_out = clr ? m : !bl ? p : dv ? q[24:17] : sum[12:5];
         end
     endfunction
-    wire [23:0] bl_w = { bl_out(fsum[41:28], fpm[47:40], fpm[23:16]),
-                         bl_out(fsum[27:14], fpm[39:32], fpm[15:8]),
-                         bl_out(fsum[13:0],  fpm[31:24], fpm[7:0]) };
+    wire [23:0] bl_w = { bl_out(fsum[41:28], fpm[47:40], fpm[23:16], frc, fclr, fblend, fdiv),
+                         bl_out(fsum[27:14], fpm[39:32], fpm[15:8],  frc, fclr, fblend, fdiv),
+                         bl_out(fsum[13:0],  fpm[31:24], fpm[7:0],   frc, fclr, fblend, fdiv) };
     wire [31:0] fin = (cyc == 2'd3) ? 32'd0 : (cyc == 2'd2) ? comb13b : {bl_w, 8'd0};
     // The RGB dither (the N64's: RGB_DITHER_SEL, other_h[7:6]): the blender's
     // 8 bits go to 5 by truncation, after the three low bits are compared with

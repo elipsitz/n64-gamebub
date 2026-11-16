@@ -24,6 +24,11 @@ module rdp_sdpram #(
     generate for (g = 0; g < NB; g = g + 1) begin : lane
         reg [LW-1:0] mem [0:(1<<AW)-1];
         reg [LW-1:0] q;
+        integer k;
+        initial begin
+            q = 0;
+            for (k = 0; k < (1 << AW); k = k + 1) mem[k] = 0;
+        end
         always @(posedge clk) begin
             if (we && wbe[g]) mem[waddr] <= wdata[g*LW +: LW];
             q <= mem[raddr];

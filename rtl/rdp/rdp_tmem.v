@@ -60,9 +60,15 @@ module rdp_tdpram #(
     output reg  [15:0]   q_b
 );
     (* ram_style = "block" *) reg [15:0] mem [0:(1<<AW)-1];
+    integer k;
+    initial begin
+        q_a = 16'd0;
+        q_b = 16'd0;
+        for (k = 0; k < (1 << AW); k = k + 1) mem[k] = 16'd0;
+    end
     always @(posedge clk) begin
         if (we) mem[addr_a] <= wdata;
         q_a <= mem[addr_a];
     end
-    always @(posedge clk) q_b <= mem[addr_b];
+    always @(posedge clk) if (!we || addr_b != addr_a) q_b <= mem[addr_b];
 endmodule
