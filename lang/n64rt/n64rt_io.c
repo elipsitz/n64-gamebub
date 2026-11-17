@@ -1400,7 +1400,12 @@ void n64rt_si_hw_event(void)
     u32 t = 0;
     if (s_pif[63] & 2u) pif_challenge();             /* (the status byte keeps that bit: a challenge, not commands) */
     else {
+        static u32 s_si_boot_polls;                  /* (.bss: zeroed on cold boot and soft restart) */
         t = pif_run(); n64rt_si_joy = 1;
+        if (s_si_boot_polls < 8u) {
+            s_si_boot_polls++;
+            if (t > 12000u) t = 12000u;              /* fast single-pad wire time during boot init (avoids PadMgr race in RTC-patched ROMs) */
+        }
     }
     for (int i = 0; i < 16; i++) if (s_pif_w[i] != orig[i]) hw_wr(PIF_RAM + 4u * (u32)i, s_pif_w[i]);
     monitor_sidone_write(t < 0x3FFFFu ? t : 0x3FFFFu);

@@ -1689,6 +1689,15 @@ void n64rt_os_start(u32 entry, u32 sp)
         if (n64rt_vi_hw()) n64rt_vi_hw_event();
         /* (the AI in hardware: MONITOR.CTL bit 4, the resampler at its default rate; AI_DACRATE's write wakes the monitor) */
         if (n64rt_ai_hw()) { extern void n64rt_ai_hw_reset(void); n64rt_ai_hw_reset(); }
+        /* Start COP0 Count ($9) at console IPL3 post-boot time (~22..45 ms, preserving low-20-bit jitter for RNG seeds)
+         * regardless of how long host SD ROM loading, n64rt boot setup, or prior gameplay ran before a soft restart.
+         * Games using libultra's __osContPifRamInit / PadMgr_Init expect osGetTime() < 500 ms (0x0165A0BC Count ticks)
+         * at boot so osContInit sleeps across VI retraces after registering PadMgr's retrace queue with IrqMgr. */
+        {
+            u32 c;
+            __asm__ volatile("mfc0 %0, $9" : "=r"(c));
+            __asm__ volatile("mtc0 %0, $9\n\tnop\n\tnop" :: "r"((c & 0xFFFFFu) + 0x100000u));
+        }
     }
 #endif
 #ifdef N64RT_RESTART_FP

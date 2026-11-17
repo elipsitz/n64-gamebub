@@ -914,6 +914,21 @@ int main(int argc, char **argv) {
                 TEST_ERR("Restart Game failed: magic=0x%08x boot_cnt=%u (want 2) was_dirty=%u (want 0)",
                          sdr_peek_word(report_w0), boot_cnt2, was_dirty);
             }
+
+            // Also verify Game Bub system-menu "Reset Game" (`CoreHalt` 0x0101 -> `CoreRun` 0x0100)!
+            sdr_poke_word(report_w0, 0u);
+            host_cmd(0x0101u); // CoreHalt
+            host_cmd(0x0100u); // CoreRun -> triggers clean soft restart!
+            long rlim2 = g_sys + 15000000L;
+            while (g_sys < rlim2 && sdr_peek_word(report_w0) != 0x600DF00Du) {
+                step_sys_cycle();
+            }
+            uint32_t boot_cnt3  = sdr_peek_word(report_w0 + 2);
+            uint32_t was_dirty3 = sdr_peek_word(report_w0 + 6);
+            if (sdr_peek_word(report_w0) != 0x600DF00Du || boot_cnt3 != 3u || was_dirty3 != 0u) {
+                TEST_ERR("System-menu CoreHalt->CoreRun Reset failed: magic=0x%08x boot_cnt=%u (want 3) was_dirty=%u (want 0)",
+                         sdr_peek_word(report_w0), boot_cnt3, was_dirty3);
+            }
         }
 
         // Halt & verify nonvolatile `.sav` (File ID 1: 2048B 16K EEPROM) & `.mpk` (File ID 2: 32KiB) persistence!

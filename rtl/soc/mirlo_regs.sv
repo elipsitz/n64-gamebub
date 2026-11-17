@@ -252,7 +252,10 @@ assign ia_an_mode = ia_an_dark ? 3'd6 : ia_an_video >= 4'd10 ? 3'd0 : ia_an_vide
 assign ia_an_scan = ia_an_dark ? 2'(ia_an_video - 4'd6) : 2'd0;
 assign ia_an_own  = ia2[31];
 always_ff @(posedge clk) begin
-    if (rst) begin ia0 <= 0; ia1 <= 0; ia2 <= 0; ia_ch0 <= 0; ia_ch1 <= 0; end
+    // Match metadata/settings.json & gb_host_bridge cfg_reg[0..3] defaults out of reset:
+    //   ia0: [4:0]=1 (Controller Pak), [14:10]=1 (Handheld R + ABXY = C-Btns)
+    //   ia1: [14:10]=1 (C-Buttons Extra = Right Stick), [19:15]=1 (Analog Stick = L-Stick / D-Pad)
+    if (rst) begin ia0 <= 32'h0000_0401; ia1 <= 32'h0000_8400; ia2 <= 0; ia_ch0 <= 0; ia_ch1 <= 0; end
     else begin
         if (wr && a == R_APF_INTERACT_INTERACT0) ia0 <= r_wdata;
         if (wr && a == R_APF_INTERACT_INTERACT1) ia1 <= r_wdata;

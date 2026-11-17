@@ -323,6 +323,7 @@ module gb_host_bridge #(
     logic [15:0] active_write_id;
     logic        non_ff_seen;
     logic [1:0]  rom_swap_mode;
+    logic        core_has_run;
 
     assign host_commandHost_busy    = (ch_state == CH_BUSY);
     assign host_commandHost_done    = (ch_state == CH_DONE);
@@ -383,6 +384,7 @@ module gb_host_bridge #(
 
             setup_done        <= 1'b0;
             core_running      <= 1'b0;
+            core_has_run      <= 1'b0;
             core_focused      <= 1'b0;
             writing_file      <= 1'b0;
             active_write_id   <= 16'd0;
@@ -629,7 +631,14 @@ module gb_host_bridge #(
                         end
 
                         CMD_CORE_RUN: begin
+                            if (!core_running && core_has_run) begin
+                                // Host issued CoreHalt -> CoreRun ("Reset Game"): trigger n64rt clean soft restart
+                                apf_interact_wr      <= 1'b1;
+                                apf_interact_address <= 5'd12;
+                                apf_interact_data    <= 32'd1;
+                            end
                             core_running    <= 1'b1;
+                            core_has_run    <= 1'b1;
                             cmd_host_reg[0] <= 32'd0;
                         end
 
@@ -650,6 +659,9 @@ module gb_host_bridge #(
                             if (cmd_host_reg[1][15:0] == 16'd0) begin
                                 rom_cache_inv <= 1'b1;
                                 rom_swap_mode <= 2'd0;
+                                core_has_run  <= 1'b0;
+                            end else if (cmd_host_reg[1][15:0] == 16'd3) begin
+                                core_has_run  <= 1'b0;
                             end
                             cmd_host_reg[0] <= 32'd0;
                         end
