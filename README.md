@@ -38,7 +38,7 @@ Nintendo 64 FPGA core for the **Game Bub Rev4** handheld (`XC7A100TCSG324-1`), a
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | **`N64MemDiagCore`** (`01-mem-diag`) | `7,122` (`11.23%`) | `3,977` (`3.14%`) | `86.5` (`64.07%`) | `0` (`0.00%`) | **`+0.585`** | **`+0.052`** | **`+2.167`** | `390,285 B` |
 | **`N64SelfTestCore`** (`02-mips-self-test`) | `36,240` (`57.16%`) | `20,432` (`16.11%`) | `128.5` (`95.19%`) | `45` (`18.75%`) | **`+0.077`** | **`+0.050`** | **`+2.167`** | `1,462,578 B` |
-| **`N64Core`** (`03..05` Production Core) | **`36,238` (`57.16%`)** | **`20,509` (`16.17%`)** | **`126.5` (`93.70%`)** | **`45` (`18.75%`)** | **`+0.108`** | **`+0.050`** | **`+2.167`** | **`1,542,594 B`** |
+| **`N64Core`** (`03..05` Production Core) | **`36,110` (`56.96%`)** | **`20,387` (`16.08%`)** | **`126.5` (`93.70%`)** | **`45` (`18.75%`)** | **`+0.085`** | **`+0.051`** | **`+2.167`** | **`1,435,130 B`** |
 
 All three bitstreams build with **`0` Critical Warnings, `0` DRC Errors, `0` latches, 100% IOB-packed SDRAM/SRAM buses (`36 ps` pin-to-pin DQ skew, `+8.960 ns` physical 10 ns Async SRAM read setup margin), `0.000 ns` `TNS`/`THS`, and 100% Vivado gate-vs-RTL `xsim` lockstep equivalence (`rsp_top`, `rcp_ai`, `mips_sys`, `rdp_top`)**.
 
