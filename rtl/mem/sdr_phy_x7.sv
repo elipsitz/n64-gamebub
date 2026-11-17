@@ -47,7 +47,6 @@ module sdr_phy_x7 (
     input  wire  [15:0] sdram_dq_in,
     output logic [15:0] sdram_dq_out,
     output logic        sdram_dq_oe,
-    output logic [15:0] sdram_dq_tri,
     output wire         sdram_clock
 );
 
@@ -128,18 +127,17 @@ end
 assign sdram_a  = a_q;
 assign sdram_ba = ba_q;
 
-// Dedicated output FFs (no internal readback) for control, DQM, DQ output, and per-bit tristate (T).
-// NOTE: `out_q` (OLOGICE2.OUTFF) and `tri_q_bit` (OLOGICE2.TFF) MUST share the exact same synchronous
-// `rst2x` SR net so Xilinx 7-Series Shape Builder co-packs both into each pin's OLOGICE2 site.
+// Dedicated output FFs (no internal readback) for control, DQM, DQ output, and 1-bit OE (`OLOGICE2.TFF`).
+// `(* IOB = "TRUE" *)` on `oe_q` causes Vivado synthesis to auto-replicate the 1-bit OE FF into all 16
+// `OLOGICE2.TFF` BELs across unmodified `HandheldTop` (sharing `rst2x` SR with `out_q`).
 (* IOB = "TRUE" *)                      logic [15:0] out_q     = 16'h0000;
-(* IOB = "TRUE", DONT_TOUCH = "TRUE" *) logic [15:0] tri_q_bit = 16'hFFFF;
+(* IOB = "TRUE" *)                      logic        oe_q      = 1'b0;
 (* IOB = "TRUE", DONT_TOUCH = "TRUE" *) logic [1:0]  cs_n_q    = 2'b11;
 (* IOB = "TRUE", DONT_TOUCH = "TRUE" *) logic [1:0]  cke_q     = 2'b00;
 (* IOB = "TRUE" *)                      logic [1:0]  dm_q      = 2'b00;
 (* IOB = "TRUE" *)                      logic        ras_n_q   = 1'b1;
 (* IOB = "TRUE" *)                      logic        cas_n_q   = 1'b1;
 (* IOB = "TRUE" *)                      logic        we_n_q    = 1'b1;
-logic        oe_q      = 1'b0;
 logic [15:0] f_rddata, rddata_d;
 logic        f_rdvalid;
 logic [4:0]  rden_sr;
@@ -147,7 +145,6 @@ logic [4:0]  rden_sr;
 always_ff @(posedge clk2x) begin
     if (rst2x) begin
         out_q     <= 16'h0000;
-        tri_q_bit <= 16'hFFFF;
         cs_n_q    <= 2'b11;
         cke_q     <= 2'b00;
         ras_n_q   <= 1'b1;
@@ -162,7 +159,6 @@ always_ff @(posedge clk2x) begin
         wr_en_d   <= 1'b0;
     end else begin
         out_q     <= f_wrdata;
-        tri_q_bit <= {16{~f_wren}};
         cs_n_q    <= f_cs_n;
         cke_q     <= r_cke;
         ras_n_q   <= f_ras_n;
@@ -186,7 +182,6 @@ assign sdram_we_n   = we_n_q;
 assign sdram_dm     = dm_q;
 assign sdram_dq_out = out_q;
 assign sdram_dq_oe  = oe_q;
-assign sdram_dq_tri = tri_q_bit;
 
 // ---- return read data into clk domain (RL = 5 clk cycles after rddata_en)
 always_ff @(posedge clk) begin

@@ -113,7 +113,6 @@ module n64_soc_gb #(
     input  wire logic [15:0] sdram_dq_in,
     output wire logic [15:0] sdram_dq_out,
     output wire logic        sdram_dq_oe,
-    output wire logic [15:0] sdram_dq_tri,
 
     // Game Bub SramV0 (IS61WV25616EDBLL-10TLI = 512 KiB, 10 ns)
     output wire logic        sram_ceN,
@@ -124,7 +123,6 @@ module n64_soc_gb #(
     input  wire logic [15:0] sram_dataIn,
     output wire logic [15:0] sram_dataOut,
     output wire logic        sram_dataDir,
-    output wire logic [15:0] sram_dataTri,
 
     // Optional debug / simulation tap outputs
     output wire logic        uart_tx_we,
@@ -266,7 +264,6 @@ module n64_soc_gb #(
         .sdram_dq_in  (sdram_dq_in),
         .sdram_dq_out (sdram_dq_out),
         .sdram_dq_oe  (sdram_dq_oe),
-        .sdram_dq_tri (sdram_dq_tri),
         .sdram_clock  (sdram_clock)
     );
 
@@ -1049,8 +1046,7 @@ module n64_soc_gb #(
         .sram_address    (sram_address),
         .sram_dataIn     (sram_dataIn),
         .sram_dataOut    (sram_dataOut),
-        .sram_dataDir    (sram_dataDir),
-        .sram_dataTri    (sram_dataTri)
+        .sram_dataDir    (sram_dataDir)
     );
 
     // -------------------------------------------------------------------------

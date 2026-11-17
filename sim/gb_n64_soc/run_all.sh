@@ -67,7 +67,7 @@ VFLAGS=(
     --cc --exe --build -j 8
     -O3 --x-assign 0 --x-initial 0
     -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM
-    -Wno-PINCONNECTEMPTY -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST
+    -Wno-PINCONNECTEMPTY -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-PROCASSINIT
     -Irtl/soc -Irtl/rsp -Irtl/rdp -Irtl/mips
     -CFLAGS "-O3 -std=c++17"
     --top-module gb_soc_tb_top

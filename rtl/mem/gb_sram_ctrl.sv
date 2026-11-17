@@ -72,8 +72,7 @@ module gb_sram_ctrl (
     output logic [17:0] sram_address,
     input  wire  [15:0] sram_dataIn,
     output logic [15:0] sram_dataOut,
-    output logic        sram_dataDir,
-    output logic [15:0] sram_dataTri
+    output logic        sram_dataDir
 );
 
 // ---- phase alignment (0 on first clk2x half of each clk cycle, 1 on second)
@@ -328,20 +327,19 @@ always_ff @(posedge clk2x) begin
     sram_in_q <= sram_dataIn;
 end
 
-// Dedicated output FFs (zero internal readback) for dataOut, per-bit tristate (T), and control signals.
-// `dout_q` (OLOGICE2.OUTFF) and `tri_q_bit` (OLOGICE2.TFF) share `rst2x` for 7-Series OLOGICE2 co-packing.
-(* IOB = "TRUE" *)                      logic [15:0] dout_q    = 16'h0000;
-(* IOB = "TRUE", DONT_TOUCH = "TRUE" *) logic [15:0] tri_q_bit = 16'hFFFF;
-(* IOB = "TRUE" *)                      logic        ce_n_q    = 1'b1;
-(* IOB = "TRUE" *)                      logic        we_n_q    = 1'b1;
-(* IOB = "TRUE" *)                      logic        oe_n_q    = 1'b1;
-(* IOB = "TRUE" *)                      logic [1:0]  mask_n_q  = 2'b11;
-logic       dir_q    = 1'b0;
+// Dedicated output FFs (zero internal readback) for dataOut, 1-bit OE (`OLOGICE2.TFF`), and control signals.
+// `(* IOB = "TRUE" *)` on `dir_q` causes Vivado synthesis to auto-replicate the 1-bit OE FF into all 16
+// `OLOGICE2.TFF` BELs across unmodified `HandheldTop` (sharing `rst2x` SR with `dout_q`).
+(* IOB = "TRUE" *) logic [15:0] dout_q    = 16'h0000;
+(* IOB = "TRUE" *) logic        dir_q     = 1'b0;
+(* IOB = "TRUE" *) logic        ce_n_q    = 1'b1;
+(* IOB = "TRUE" *) logic        we_n_q    = 1'b1;
+(* IOB = "TRUE" *) logic        oe_n_q    = 1'b1;
+(* IOB = "TRUE" *) logic [1:0]  mask_n_q  = 2'b11;
 
 always_ff @(posedge clk2x) begin
     if (rst2x) begin
         dout_q    <= 16'h0000;
-        tri_q_bit <= 16'hFFFF;
         ce_n_q    <= 1'b1;
         we_n_q    <= 1'b1;
         oe_n_q    <= 1'b1;
@@ -351,7 +349,6 @@ always_ff @(posedge clk2x) begin
         rx_lo     <= 16'h0000;
     end else begin
         dout_q    <= nxt_dout;
-        tri_q_bit <= {16{~nxt_dir}};
         ce_n_q    <= nxt_ce_n;
         we_n_q    <= nxt_we_n;
         oe_n_q    <= nxt_oe_n;
@@ -373,7 +370,6 @@ assign sram_oeN        = oe_n_q;
 assign sram_writeMaskN = mask_n_q;
 assign sram_dataOut    = dout_q;
 assign sram_dataDir    = dir_q;
-assign sram_dataTri    = tri_q_bit;
 
 endmodule
 `default_nettype wire

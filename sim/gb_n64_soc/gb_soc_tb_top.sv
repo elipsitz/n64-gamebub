@@ -241,7 +241,6 @@ module gb_soc_tb_top #(
             .sdram_dataIn                       (sdram_dq_in),
             .sdram_dataOut                      (sdram_dq_out),
             .sdram_dataDir                      (sdram_dq_oe),
-            .sdram_dataTri                      (),
 
             .sram_ceN                           (sram_ceN),
             .sram_weN                           (sram_weN),
@@ -250,8 +249,7 @@ module gb_soc_tb_top #(
             .sram_address                       (sram_address),
             .sram_dataIn                        (sram_dataIn),
             .sram_dataOut                       (sram_dataOut),
-            .sram_dataDir                       (sram_dataDir),
-            .sram_dataTri                       ()
+            .sram_dataDir                       (sram_dataDir)
         );
         assign u_diag.u_mmcm.sim_clk_sys   = tb_clk_sys;
         assign u_diag.u_mmcm.sim_clk_cpu   = tb_clk_cpu;
@@ -416,7 +414,6 @@ module gb_soc_tb_top #(
             .sdram_dataIn                       (sdram_dq_in),
             .sdram_dataOut                      (sdram_dq_out),
             .sdram_dataDir                      (sdram_dq_oe),
-            .sdram_dataTri                      (),
 
             .sram_ceN                           (sram_ceN),
             .sram_weN                           (sram_weN),
@@ -425,8 +422,7 @@ module gb_soc_tb_top #(
             .sram_address                       (sram_address),
             .sram_dataIn                        (sram_dataIn),
             .sram_dataOut                       (sram_dataOut),
-            .sram_dataDir                       (sram_dataDir),
-            .sram_dataTri                       ()
+            .sram_dataDir                       (sram_dataDir)
         );
         assign u_top.u_mmcm.sim_clk_sys   = tb_clk_sys;
         assign u_top.u_mmcm.sim_clk_cpu   = tb_clk_cpu;

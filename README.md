@@ -76,20 +76,18 @@ docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp \
   '
 ```
 
-### Build All Bitstreams & Repackage `dist/` (Vivado 2023.2)
+### Build `N64Core` Bitstream & Repackage `dist/` (Vivado 2023.2)
 ```bash
 export PATH="$HOME/Xilinx2023.2/Vivado/2023.2/bin:$PATH"
-./mill root.buildCore --target gamebub_rev4 --core-class N64MemDiagCore
-./mill root.buildCore --target gamebub_rev4 --core-class N64SelfTestCore
 ./mill root.buildCore --target gamebub_rev4 --core-class N64Core
-python3 tools/package_dist.py --bundle all
+python3 tools/package_dist.py --bundle n64
 ```
 
 ## 5. Framework Notes & Upstream Proposals
 
-See [`docs/FRAMEWORK_PROPOSALS.md`](docs/FRAMEWORK_PROPOSALS.md) for:
-1. The minimal 1-file `framework/scripts/build_core.py` patch adding `.vh`/`.svh` (`is_include_file=True`) and `.hex`/`.mem` (`file_type="mem"`) discovery so upstream `MIRLO64` `$readmemh` and `` `include `` files work unmodified in Vivado.
-2. **Option B Upstream RFC:** Cycle-accurate `10 ns` `IS61WV25616EDBLL-10TLI` SRAM display framebuffer interleaving design for `HandheldTop.scala` (reclaiming `74.0` `RAMB36E1`s for future cores that do not use `SramV0`).
+`GameBub.N64` builds against **100% unmodified** upstream [`gamebub/framework`](https://github.com/gamebub/framework) (`f2b000c`). See [`docs/FRAMEWORK_PROPOSALS.md`](docs/FRAMEWORK_PROPOSALS.md) for:
+1. Notes on `(* IOB = "TRUE" *)` scalar-to-vector `OLOGICE2.TFF` auto-replication across `HandheldTop` (`SdramV0`/`SramV0`) and optional `heatshrink2` packaging in `package.mill`.
+2. **Option B Upstream RFC:** Cycle-accurate `10 ns` `IS61WV25616EDBLL-10TLI` SRAM display framebuffer interleaving design for `HandheldTop.scala` (reclaiming `73.0` `RAMB36E1`s for future cores that do not use `SramV0`).
 
 ## License
 

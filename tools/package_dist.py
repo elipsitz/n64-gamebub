@@ -217,9 +217,14 @@ def package_one(bundle_name: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bundle", default="all", choices=["all", *BUNDLES.keys()])
+    parser.add_argument("--bundle", default="n64", choices=["all", "n64", *BUNDLES.keys()])
     args = parser.parse_args()
-    targets = list(BUNDLES.keys()) if args.bundle == "all" else [args.bundle]
+    if args.bundle == "all":
+        targets = list(BUNDLES.keys())
+    elif args.bundle == "n64":
+        targets = [k for k, v in BUNDLES.items() if v["core_class"] == "N64Core"]
+    else:
+        targets = [args.bundle]
     for b in targets:
         package_one(b)
 
