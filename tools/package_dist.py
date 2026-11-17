@@ -3,24 +3,18 @@
 
 Each bundle under `dist/<bundle>/cores/<CoreId>/` is a drop-in SD card directory
 containing `core.json`, optional `files.json` & `settings.json`, `<Core>-gamebub_rev4.bit`,
-heatshrink-compressed `<Core>-gamebub_rev4.bit.hs` (w=9, l=6), and (for N64Core)
-`n64rt.sys` + `n64savedb.txt`, plus a `BUILD_MANIFEST.txt` recording Vivado 2023.2
-utilization and timing closure (`WNS`, `TNS`, `WHS`, `THS`, `WPWS`).
+and (for N64Core) `n64rt.sys` + `n64savedb.txt`, plus a `BUILD_MANIFEST.txt` recording
+Vivado 2023.2 utilization and timing closure (`WNS`, `TNS`, `WHS`, `THS`, `WPWS`).
 """
 
 import argparse
 import hashlib
-import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
-import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_HS_PYTHON = Path(
-    "/usr/local/google/home/elipsitz/.gemini/jetski/brain/35f273ef-b747-4c8a-b647-25228a69c124/scratch/hs_venv/bin/python3"
-)
 
 BUNDLES = {
     "01-mem-diag": {
@@ -64,30 +58,6 @@ BUNDLES = {
         "with_runtime": True,
     },
 }
-
-
-def encode_heatshrink(bit_path: Path, out_hs: Path) -> None:
-    try:
-        import heatshrink2  # type: ignore
-
-        raw = bit_path.read_bytes()
-        out_hs.write_bytes(heatshrink2.encode(raw, window_sz2=9, lookahead_sz2=6))
-        return
-    except ImportError:
-        pass
-
-    py = os.environ.get("HS_PYTHON") or (str(DEFAULT_HS_PYTHON) if DEFAULT_HS_PYTHON.exists() else sys.executable)
-    subprocess.run(
-        [
-            py,
-            "-c",
-            "import heatshrink2, sys; "
-            "open(sys.argv[2],'wb').write(heatshrink2.encode(open(sys.argv[1],'rb').read(), window_sz2=9, lookahead_sz2=6))",
-            str(bit_path),
-            str(out_hs),
-        ],
-        check=True,
-    )
 
 
 def extract_vivado_metrics(build_dir: Path) -> dict[str, str]:
@@ -175,10 +145,8 @@ def package_one(bundle_name: str) -> None:
 
     git_rev = subprocess.check_output(["git", "rev-parse", "--short=12", "HEAD"], cwd=ROOT, text=True).strip()
     dst_bit = core_dir / bit_name
-    dst_hs = core_dir / (bit_name + ".hs")
     shutil.copy2(src_bit, dst_bit)
     refresh_bitstream_gitrev(dst_bit, git_rev)
-    encode_heatshrink(dst_bit, dst_hs)
 
     shutil.copy2(ROOT / cfg["core_json"], core_dir / "core.json")
     if cfg["files_json"]:

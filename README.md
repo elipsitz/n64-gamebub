@@ -34,11 +34,11 @@ Nintendo 64 FPGA core for the **Game Bub Rev4** handheld (`XC7A100TCSG324-1`), a
 
 ## 2. Measured Vivado 2023.2 Post-Route Utilization & Timing (`XC7A100TCSG324-1`)
 
-| Core Class (`Bundle`) | Slice LUTs (`63,400`) | Slice Regs (`126,800`) | Block RAM (`135`) | `DSP48E1` (`240`) | `WNS` (`ns`) | `WHS` (`ns`) | `WPWS` (`ns`) | `.bit.hs` Size |
+| Core Class (`Bundle`) | Slice LUTs (`63,400`) | Slice Regs (`126,800`) | Block RAM (`135`) | `DSP48E1` (`240`) | `WNS` (`ns`) | `WHS` (`ns`) | `WPWS` (`ns`) | `.bit` Size |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **`N64MemDiagCore`** (`01-mem-diag`) | `7,122` (`11.23%`) | `3,977` (`3.14%`) | `86.5` (`64.07%`) | `0` (`0.00%`) | **`+0.585`** | **`+0.052`** | **`+2.167`** | `390,285 B` |
-| **`N64SelfTestCore`** (`02-mips-self-test`) | `36,240` (`57.16%`) | `20,432` (`16.11%`) | `128.5` (`95.19%`) | `45` (`18.75%`) | **`+0.077`** | **`+0.050`** | **`+2.167`** | `1,462,578 B` |
-| **`N64Core`** (`03..05` Production Core) | **`36,110` (`56.96%`)** | **`20,387` (`16.08%`)** | **`126.5` (`93.70%`)** | **`45` (`18.75%`)** | **`+0.085`** | **`+0.051`** | **`+2.167`** | **`1,435,130 B`** |
+| **`N64MemDiagCore`** (`01-mem-diag`) | `7,122` (`11.23%`) | `3,977` (`3.14%`) | `86.5` (`64.07%`) | `0` (`0.00%`) | **`+0.585`** | **`+0.052`** | **`+2.167`** | `573,277 B` |
+| **`N64SelfTestCore`** (`02-mips-self-test`) | `36,240` (`57.16%`) | `20,432` (`16.11%`) | `128.5` (`95.19%`) | `45` (`18.75%`) | **`+0.077`** | **`+0.050`** | **`+2.167`** | `2,676,349 B` |
+| **`N64Core`** (`03..05` Production Core) | **`36,110` (`56.96%`)** | **`20,387` (`16.08%`)** | **`126.5` (`93.70%`)** | **`45` (`18.75%`)** | **`+0.085`** | **`+0.051`** | **`+2.167`** | **`2,659,341 B`** |
 
 All three bitstreams build with **`0` Critical Warnings, `0` DRC Errors, `0` latches, 100% IOB-packed SDRAM/SRAM buses (`36 ps` pin-to-pin DQ skew, `+8.960 ns` physical 10 ns Async SRAM read setup margin), `0.000 ns` `TNS`/`THS`, and 100% Vivado gate-vs-RTL `xsim` lockstep equivalence (`rsp_top`, `rcp_ai`, `mips_sys`, `rdp_top`)**.
 
@@ -86,7 +86,7 @@ python3 tools/package_dist.py --bundle n64
 ## 5. Framework Notes & Upstream Proposals
 
 `GameBub.N64` builds against **100% unmodified** upstream [`gamebub/framework`](https://github.com/gamebub/framework) (`f2b000c`). See [`docs/FRAMEWORK_PROPOSALS.md`](docs/FRAMEWORK_PROPOSALS.md) for:
-1. Notes on `(* IOB = "TRUE" *)` scalar-to-vector `OLOGICE2.TFF` auto-replication across `HandheldTop` (`SdramV0`/`SramV0`) and optional `heatshrink2` packaging in `package.mill`.
+1. Notes on `(* IOB = "TRUE" *)` scalar-to-vector `OLOGICE2.TFF` auto-replication across `HandheldTop` (`SdramV0`/`SramV0`).
 2. **Option B Upstream RFC:** Cycle-accurate `10 ns` `IS61WV25616EDBLL-10TLI` SRAM display framebuffer interleaving design for `HandheldTop.scala` (reclaiming `73.0` `RAMB36E1`s for future cores that do not use `SramV0`).
 
 ## License
