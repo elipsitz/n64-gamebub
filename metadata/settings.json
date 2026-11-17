@@ -79,14 +79,6 @@
       "value": "0x1"
     },
     {
-      "id": 7,
-      "label": "32-bit Color",
-      "address": "0x7000001C",
-      "type": "checkbox",
-      "default": "0x0",
-      "value": "0x1"
-    },
-    {
       "id": 8,
       "label": "Scaling Filter",
       "address": "0x70000020",

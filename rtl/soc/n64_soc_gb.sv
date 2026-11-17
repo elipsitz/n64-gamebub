@@ -489,7 +489,7 @@ module n64_soc_gb #(
     logic [16:0] vi_thr;
     wire  [4:0]  vid_crop_v;
     wire  [1:0]  vid_crop_r, vid_crop_l;
-    wire         vid_deblur, vid_out32;
+    wire         vid_deblur;
 
     logic        mon_ai, ai_clr, ai_chg, ai_req;
     logic        ai_irq /*verilator public_flat_rd*/, ai_fw /*verilator public_flat_rd*/,
@@ -570,7 +570,6 @@ module n64_soc_gb #(
         .ia_crop_v              (vid_crop_v),
         .ia_crop_r              (vid_crop_r),
         .ia_crop_l              (vid_crop_l),
-        .ia_out32               (vid_out32),
         .ia_deblur              (vid_deblur),
         .ia_rumble              (rumble_motor_on),
         .vblank                 (vblank),
@@ -804,7 +803,7 @@ module n64_soc_gb #(
         endcase
     end
 
-    // RDP (with 9-bit-col shadow plane at 0x4350_0000 = word 24'hD4_0000)
+    // RDP
     logic        m_cmd_valid, m_cmd_ready, m_cmd_we, m_wdata_valid, m_wdata_ready, m_rdata_valid;
     logic [31:0] m_cmd_addr, m_wdata, m_rdata, rdp_addr;
     logic [3:0]  m_wdata_we;
@@ -812,8 +811,6 @@ module n64_soc_gb #(
     rdp_top rdp (
         .clk           (clk),
         .rst           (rst),
-        .dither_off    (vid_out32),
-        .shadow_en     (vid_out32),
         .cmd_valid     (cmd_valid),
         .cmd_ready     (cmd_ready),
         .cmd_data      (cmd_data),
@@ -835,11 +832,8 @@ module n64_soc_gb #(
         .tmem_busy     (rdp_tmem_busy)
     );
 
-    wire [19:0] sh_n = rdp_addr[21:2];
-    wire [18:0] sh_w = {sh_n[18:10] ^ {sh_n[19], 8'd0}, sh_n[8:7] ^ 2'b01, sh_n[9], sh_n[6:0]};
     assign m_cmd_addr = {
         6'd0,
-        rdp_addr[24] ? (24'hD4_0000 + {5'd0, sh_w}) :
         rdp_addr[23] ? (24'hDC_0000 + {6'd0, rdp_addr[19:2]}) :
                        (24'hE0_0000 + {3'd0, rdp_addr[22:2]}),
         2'b00
@@ -1137,9 +1131,7 @@ module n64_soc_gb #(
     n64_video #(
         .ORIGIN_MASK (24'hFFFFFF),
         .N64FB       (1'b1),
-        .FAW         (11),
-        .SHADOW_BASE (24'hD4_0000),
-        .COL9        (1'b1)
+        .FAW         (11)
     ) video (
         .clk         (clk),
         .rst         (rst),
@@ -1160,7 +1152,6 @@ module n64_soc_gb #(
         .vi_divot    (mon_vi && vi_dv),
         .vi_dedither (mon_vi && vi_dd),
         .vi_deblur   (vid_deblur),
-        .vi_out32    (vid_out32),
         .crop_v      (vid_crop_v),
         .crop_l      (vid_crop_l),
         .crop_r      (vid_crop_r),

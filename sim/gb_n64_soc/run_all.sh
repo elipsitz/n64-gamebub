@@ -32,6 +32,7 @@ N64_RTL=(
     rtl/diag/n64_mem_diag_top.sv
     rtl/bridge/gb_host_bridge.sv
     rtl/video_gb/n64_video_gb_downsampler.sv
+    rtl/mips/fpu_d64.sv
     rtl/mips/fpu_n64.sv
     rtl/mips/mips_core.sv
     rtl/rsp/rsp_dpram.sv
@@ -88,7 +89,7 @@ echo "=== [3/4] Building N64Core Full-SoC Simulator & Running Hardware Regressio
 "$VERILATOR" "${VFLAGS[@]}" -GDIAG_CORE_MODE=0 -GSELF_TEST_MODE=0 --Mdir "$BUILD_DIR/obj_n64" \
     "${N64_RTL[@]}" "$ROOT/sim/gb_n64_soc/tb_gb_soc.cpp" -o tb_n64
 
-for t in cpu_test int64_test ddiv64_test ualn_test tlbram_test dma_coh_test mi_test vi_test ai_test si_test; do
+for t in cpu_test int64_test ddiv64_test ualn_test fpu_d64_test tlbram_test dma_coh_test mi_test vi_test ai_test si_test; do
     "$BUILD_DIR/obj_n64/tb_n64" --mode mipstest --file "lang/mips/test/build/${t}.bin"
 done
 
