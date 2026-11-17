@@ -163,6 +163,28 @@ module n64_gamebub_top #(
     // VibrateV0
     output wire logic [1:0]  vibrate_mode,
 
+    // CartridgePortV0 (Physical DMG/CGB Transfer Pak slot)
+    output wire logic        cartridge_enabled,
+    input  wire logic        cartridge_switch,
+    input  wire logic [7:0]  cartridge_bank0In,
+    input  wire logic [7:0]  cartridge_bank1In,
+    input  wire logic [7:0]  cartridge_bank2In,
+    input  wire logic [3:0]  cartridge_bank3In,
+    input  wire logic        cartridge_pin30In,
+    input  wire logic        cartridge_pin31In,
+    output wire logic [7:0]  cartridge_bank0Out,
+    output wire logic [7:0]  cartridge_bank1Out,
+    output wire logic [7:0]  cartridge_bank2Out,
+    output wire logic [3:0]  cartridge_bank3Out,
+    output wire logic        cartridge_pin30Out,
+    output wire logic        cartridge_pin31Out,
+    output wire logic        cartridge_bank0Dir,
+    output wire logic        cartridge_bank1Dir,
+    output wire logic        cartridge_bank2Dir,
+    output wire logic        cartridge_bank3Dir,
+    output wire logic        cartridge_pin30Dir,
+    output wire logic        cartridge_pin31Dir,
+
     // SdramV0 (2x W9825G6KH-6 = 64 MiB total on Rev4)
     output wire logic        sdram_clock,
     output wire logic [NUM_SDRAM_CHIPS-1:0] sdram_cke,
@@ -658,6 +680,22 @@ module n64_gamebub_top #(
         .sram_dataOut                   (sram_dataOut),
         .sram_dataDir                   (sram_dataDir),
 
+        .cartridge_enabled              (cartridge_enabled),
+        .cartridge_switch               (cartridge_switch),
+        .cartridge_bank0In              (cartridge_bank0In),
+        .cartridge_bank0Out             (cartridge_bank0Out),
+        .cartridge_bank0Dir             (cartridge_bank0Dir),
+        .cartridge_bank1Out             (cartridge_bank1Out),
+        .cartridge_bank1Dir             (cartridge_bank1Dir),
+        .cartridge_bank2Out             (cartridge_bank2Out),
+        .cartridge_bank2Dir             (cartridge_bank2Dir),
+        .cartridge_bank3Out             (cartridge_bank3Out),
+        .cartridge_bank3Dir             (cartridge_bank3Dir),
+        .cartridge_pin30Out             (cartridge_pin30Out),
+        .cartridge_pin30Dir             (cartridge_pin30Dir),
+        .cartridge_pin31Out             (cartridge_pin31Out),
+        .cartridge_pin31Dir             (cartridge_pin31Dir),
+
         .uart_tx_we                     (uart_tx_we),
         .uart_tx_byte                   (uart_tx_byte),
         .dbg_cpu_pc                     (dbg_cpu_pc),
@@ -666,7 +704,9 @@ module n64_gamebub_top #(
     );
 
     wire _unused_ok = &{1'b0, core_focused, apf_interact_q, uart_tx_we, uart_tx_byte,
-                        dbg_cpu_pc, dbg_cpu_cause, dbg_cpu_epc, soc_sdram_cke, soc_sdram_cs_n};
+                        dbg_cpu_pc, dbg_cpu_cause, dbg_cpu_epc, soc_sdram_cke, soc_sdram_cs_n,
+                        cartridge_bank1In, cartridge_bank2In, cartridge_bank3In,
+                        cartridge_pin30In, cartridge_pin31In};
 endmodule
 
 `default_nettype wire

@@ -15,7 +15,7 @@
     }
   ],
   "hardware": {
-    "cartridge_enable": "no",
+    "cartridge_enable": "yes",
     "cartridge_selectable": false
   }
 }

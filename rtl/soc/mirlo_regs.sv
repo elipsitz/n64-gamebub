@@ -170,6 +170,7 @@ module mirlo_regs #(
     output logic [15:0] gbc_addr,
     output logic [7:0]  gbc_wdata,
     input  wire         gbc_busy,
+    input  wire         gbc_present = 1'b1,
     input  wire  [7:0]  gbc_rdata
 );
 `include "mirlo_regs.svh"
@@ -554,8 +555,8 @@ always_comb begin
     endcase
     case (a[5:2])                                               // GB_CART
     R_GB_CART_ID[5:2]:                     rb[12] = GB_CART_PRESENT ? 32'h4742_0001 : 32'd0;
-    // (BUSY from the write on: the engine's own busy is a cycle behind gbc_start)
-    R_GB_CART_ACCESS[5:2]:                 rb[12] = {gbc_busy || gbc_start, 23'd0, gbc_rdata};
+    // (BUSY from the write on: the engine's own busy is a cycle behind gbc_start; bit 30 = synchronized DMG/CGB switch)
+    R_GB_CART_ACCESS[5:2]:                 rb[12] = {gbc_busy || gbc_start, gbc_present, 22'd0, gbc_rdata};
     default: ;
     endcase
     rb[14] = sn_q;                                              // SNAC

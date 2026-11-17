@@ -160,6 +160,11 @@ static void slot_look(int virt)
     }
     s_slot.virt = 0;
     if (!s_slot.hw) return;
+    if (!(gb_cart_access_read() & 0x40000000u)) {
+        gb_cart_ctrl_write(0);
+        if (s_slot.in != was) s_slot.pulled = 1;
+        return;
+    }
     gb_cart_ctrl_write(1);                      /* out of reset; no TRUST: reads of the ROM only */
     wait_us(200);
     int ok = 1;
@@ -175,21 +180,6 @@ static void slot_look(int virt)
     { static u32 s_n; if (s_n++ < 8u) n64rt_log("n64rt: the cartridge slot: %s (header %02x %02x %02x %02x, type %02x)\n",
                                                  s_slot.in ? "a Game Boy cartridge" : "none", h[0], h[1], h[2], h[3], h[0x47]); }
 #endif
-}
-
-/* Who has the cartridge slot: a Game Boy cartridge (the Transfer Pak's) or the Analogizer (docs/analogizer.md). The runtime looks for a Game Boy
- * cartridge's header once, when the core starts (nothing is driven but the address pins and /RD, for a fraction of a millisecond); there is none -> the
- * adapter's (there is no setting for it). INTERACT2's bit 31 is the answer
- * the video output reads; once the adapter owns the port it is not looked at again (a restart of the game does not disturb it), and a Transfer Pak
- * cartridge is then no cartridge at all: the port is no longer ours. */
-#define AN_OWN        0x80000000u
-static void slot_owner(void)
-{
-    u32 w = apf_interact_interact2_read();
-    if (w & AN_OWN) { s_slot.hw = 0; return; }
-    slot_look(0);
-    if (!s_slot.in) w |= AN_OWN;
-    if (w & AN_OWN) { apf_interact_interact2_write(w); s_slot.hw = 0; s_slot.in = 0; }
 }
 
 static void settle(void) { for (volatile int i = 0; i < 256; i++) { } }
@@ -259,7 +249,6 @@ void n64rt_pak_init(void)
     s_ch = 0;
     s_slot.hw = gb_cart_id_read() == GBC_ID;
     if (s_slot.hw) gb_cart_ctrl_write(0);
-    if (s_slot.hw) slot_owner();
     for (int ch = 0; ch < NGBPAK; ch++) {
         s_ch = ch;
         int k = n64rt_pak_kind(ch);
@@ -296,7 +285,7 @@ int n64rt_pak_kind(int ch)
 #else
     case 2: return N64RT_PAK_RUMBLE;
 #endif
-    case 6: return N64RT_PAK_TRANSFER;
+    case 6: case 9: return N64RT_PAK_TRANSFER;
     case 3: case 5: return N64RT_PAK_VIRTUAL;
     default: return N64RT_PAK_NONE;
     }
@@ -357,7 +346,12 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
     }
     if (ch < NGBPAK) {
         s_ch = ch;
-        if (kind != N64RT_PAK_TRANSFER && !virt && s_slot.bus) { slot_power(0, 0); s_tp.access = 0; }
+        if (kind != N64RT_PAK_TRANSFER && !virt && (s_slot.bus || s_tp.on || s_slot.looked)) {
+            slot_power(0, 0);
+            s_tp.on = 0;
+            s_tp.access = 0;
+            s_slot.looked = 0;
+        }
         if (s_slot.bus && s_slot.virt != (u8)virt) { slot_power(0, 0); s_tp.access = 0; }
     }
     if (kind == N64RT_PAK_NONE) return 1;
@@ -411,7 +405,13 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
         trace_access(ch, a, 1, b);
         return 0;
     }
-    if (hi == 0xBu && s_tp.on && !s_tp.access && now() - s_slot.looked > CONFIG_CLOCK_FREQUENCY)
+    if (!virt && s_slot.hw && s_slot.in && !(gb_cart_access_read() & 0x40000000u)) {
+        gb_cart_ctrl_write(0);
+        s_slot.in = 0;
+        s_slot.bus = 0;
+        s_slot.pulled = 1;
+    }
+    if (hi == 0xBu && s_tp.on && !s_tp.access && (!s_slot.looked || now() - s_slot.looked > CONFIG_CLOCK_FREQUENCY))
         slot_look(virt);                                /* (it may have been put in, or taken out) */
     memset(b, 0, 32);
     if (!s_tp.on) return 0;

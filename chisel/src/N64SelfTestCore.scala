@@ -33,6 +33,7 @@ class N64SelfTestCore extends Module with Core {
     val host = new HostV0()
     val input = new InputExtendedV0(numSlots = 4)
     val vibrate = new VibrateV0()
+    val cartridge = new CartridgePortV0()
     val sdram = new SdramV0(
       addressWidth = 13,
       dataWidth = 16,

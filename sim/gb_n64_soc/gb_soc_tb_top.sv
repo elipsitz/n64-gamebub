@@ -66,6 +66,12 @@ module gb_soc_tb_top #(
     // VibrateV0
     output wire logic [1:0]  vibrate_mode,
 
+    // CartridgePortV0 simulation controls & telemetry
+    input  wire logic        tb_cart_switch,
+    output wire logic [15:0] tb_cart_bus_err,
+    output wire logic [15:0] tb_cart_reads,
+    output wire logic [15:0] tb_cart_writes,
+
     // SdramV0 (2x W9825G6KH-6)
     output wire logic        sdram_clock,
     output wire logic [1:0]  sdram_cke,
@@ -261,7 +267,17 @@ module gb_soc_tb_top #(
         assign tb_diag_pass_cnt = u_diag.pass_cnt;
         assign tb_diag_any_err  = u_diag.err_r0 | u_diag.err_r1 | u_diag.err_sram | u_diag.err_cache;
         assign tb_mmcm_ps_cur   = u_diag.ps_current;
+        assign tb_cart_bus_err  = 16'd0;
+        assign tb_cart_reads    = 16'd0;
+        assign tb_cart_writes   = 16'd0;
     end else begin : g_n64
+        wire       cart_enabled;
+        wire [7:0] cart_bank0_in, cart_bank0_out, cart_bank1_out, cart_bank2_out;
+        wire [3:0] cart_bank3_out;
+        wire       cart_pin30_out, cart_pin31_out;
+        wire       cart_bank0_dir, cart_bank1_dir, cart_bank2_dir, cart_bank3_dir;
+        wire       cart_pin30_dir, cart_pin31_dir;
+
         n64_gamebub_top #(
             .DISPLAY_DIVIDER (25),
             .NUM_SDRAM_CHIPS (2),
@@ -402,6 +418,27 @@ module gb_soc_tb_top #(
 
             .vibrate_mode                       (vibrate_mode),
 
+            .cartridge_enabled                  (cart_enabled),
+            .cartridge_switch                   (tb_cart_switch),
+            .cartridge_bank0In                  (cart_bank0_in),
+            .cartridge_bank1In                  (8'hFF),
+            .cartridge_bank2In                  (8'hFF),
+            .cartridge_bank3In                  (4'hF),
+            .cartridge_pin30In                  (1'b1),
+            .cartridge_pin31In                  (1'b1),
+            .cartridge_bank0Out                 (cart_bank0_out),
+            .cartridge_bank1Out                 (cart_bank1_out),
+            .cartridge_bank2Out                 (cart_bank2_out),
+            .cartridge_bank3Out                 (cart_bank3_out),
+            .cartridge_pin30Out                 (cart_pin30_out),
+            .cartridge_pin31Out                 (cart_pin31_out),
+            .cartridge_bank0Dir                 (cart_bank0_dir),
+            .cartridge_bank1Dir                 (cart_bank1_dir),
+            .cartridge_bank2Dir                 (cart_bank2_dir),
+            .cartridge_bank3Dir                 (cart_bank3_dir),
+            .cartridge_pin30Dir                 (cart_pin30_dir),
+            .cartridge_pin31Dir                 (cart_pin31_dir),
+
             .sdram_clock                        (sdram_clock),
             .sdram_cke                          (sdram_cke),
             .sdram_cs                           (sdram_cs_n),
@@ -424,6 +461,29 @@ module gb_soc_tb_top #(
             .sram_dataOut                       (sram_dataOut),
             .sram_dataDir                       (sram_dataDir)
         );
+        gb_cart_model_gb u_gb_cart_model (
+            .clk          (clk_sys),
+            .rst          (reset),
+            .cart_switch  (tb_cart_switch),
+            .cart_enabled (cart_enabled),
+            .bank0_in     (cart_bank0_in),
+            .bank0_out    (cart_bank0_out),
+            .bank0_dir    (cart_bank0_dir),
+            .bank1_out    (cart_bank1_out),
+            .bank1_dir    (cart_bank1_dir),
+            .bank2_out    (cart_bank2_out),
+            .bank2_dir    (cart_bank2_dir),
+            .bank3_out    (cart_bank3_out),
+            .bank3_dir    (cart_bank3_dir),
+            .pin30_out    (cart_pin30_out),
+            .pin30_dir    (cart_pin30_dir),
+            .pin31_out    (cart_pin31_out),
+            .pin31_dir    (cart_pin31_dir),
+            .bus_errors   (tb_cart_bus_err),
+            .bus_reads    (tb_cart_reads),
+            .bus_writes   (tb_cart_writes)
+        );
+
         assign u_top.u_mmcm.sim_clk_sys   = tb_clk_sys;
         assign u_top.u_mmcm.sim_clk_cpu   = tb_clk_cpu;
         assign u_top.u_mmcm.sim_clk_sys2x = tb_clk_sys2x;

@@ -50,6 +50,7 @@ N64_RTL=(
     rtl/soc/afifo.sv
     rtl/soc/cpu_port.sv
     rtl/soc/fifo_fwft.sv
+    rtl/soc/gb_cart.sv
     rtl/soc/mips_sys.sv
     rtl/soc/mirlo_regs.sv
     rtl/soc/mon_ram.sv
@@ -61,6 +62,7 @@ N64_RTL=(
     rtl/soc/rcp_si.sv
     rtl/soc/rcp_vi.sv
     rtl/soc/n64_soc_gb.sv
+    sim/gb_n64_soc/gb_cart_model_gb.sv
     sim/gb_n64_soc/gb_soc_tb_top.sv
 )
 
@@ -93,10 +95,12 @@ for t in cpu_test int64_test ddiv64_test ualn_test fpu_d64_test tlbram_test dma_
     "$BUILD_DIR/obj_n64/tb_n64" --mode mipstest --file "lang/mips/test/build/${t}.bin"
 done
 
-echo "=== [4/4] Verifying Commercial N64 Boot (.z64/.v64/.n64), .sav/.mpk, Rumble, Soft Restart, & 64 MiB On-Demand Paging ==="
+echo "=== [4/4] Verifying Commercial N64 Boot (.z64/.v64/.n64), .sav/.mpk, Rumble, Transfer Pak, Soft Restart, & 64 MiB On-Demand Paging ==="
 "$BUILD_DIR/obj_n64/tb_n64" --mode n64rom     --file "$BUILD_DIR/guest_rom.z64" --pak 1 --test-restart
 "$BUILD_DIR/obj_n64/tb_n64" --mode n64rom     --file "$BUILD_DIR/guest_rom.v64" --pak 2
 "$BUILD_DIR/obj_n64/tb_n64" --mode n64rom     --file "$BUILD_DIR/guest_rom.n64" --pak 1
+"$BUILD_DIR/obj_n64/tb_n64" --mode n64rom     --file "$BUILD_DIR/guest_rom.z64" --pak 9 --cart-switch 0
+"$BUILD_DIR/obj_n64/tb_n64" --mode n64rom     --file "$BUILD_DIR/guest_rom.z64" --pak 9 --cart-switch 1 --test-restart
 "$BUILD_DIR/obj_n64/tb_n64" --mode ondemand64 --file "$BUILD_DIR/guest_rom_64m.z64" --pak 1
 
 rm -f rsp_div_rom.hex

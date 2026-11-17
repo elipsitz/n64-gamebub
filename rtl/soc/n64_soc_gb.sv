@@ -124,6 +124,23 @@ module n64_soc_gb #(
     output wire logic [15:0] sram_dataOut,
     output wire logic        sram_dataDir,
 
+    // Game Bub CartridgePortV0 (Physical DMG/CGB Transfer Pak slot)
+    output wire logic        cartridge_enabled,
+    input  wire logic        cartridge_switch,
+    input  wire logic [7:0]  cartridge_bank0In,
+    output wire logic [7:0]  cartridge_bank0Out,
+    output wire logic        cartridge_bank0Dir,
+    output wire logic [7:0]  cartridge_bank1Out,
+    output wire logic        cartridge_bank1Dir,
+    output wire logic [7:0]  cartridge_bank2Out,
+    output wire logic        cartridge_bank2Dir,
+    output wire logic [3:0]  cartridge_bank3Out,
+    output wire logic        cartridge_bank3Dir,
+    output wire logic        cartridge_pin30Out,
+    output wire logic        cartridge_pin30Dir,
+    output wire logic        cartridge_pin31Out,
+    output wire logic        cartridge_pin31Dir,
+
     // Optional debug / simulation tap outputs
     output wire logic        uart_tx_we,
     output wire logic [7:0]  uart_tx_byte,
@@ -520,7 +537,26 @@ module n64_soc_gb #(
     logic [10:0] fb_xs, fb_nw;
     logic        fb_gamma, fb_tall, fb_pal, tv_pal, fb_dma_enable, fb_vtg_enable, fb_mode, vblank;
 
-    mirlo_regs #(.GB_CART_PRESENT(1'b0)) regs (
+    (* ASYNC_REG = "TRUE" *) logic cart_sw_s1, cart_sw_sync;
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            cart_sw_s1   <= 1'b0;
+            cart_sw_sync <= 1'b0;
+        end else begin
+            cart_sw_s1   <= cartridge_switch;
+            cart_sw_sync <= cart_sw_s1;
+        end
+    end
+
+    logic        gbc_on, gbc_trust, gbc_start, gbc_we, gbc_busy;
+    logic [15:0] gbc_addr;
+    logic [7:0]  gbc_wdata, gbc_rdata;
+    logic        gb_bus_on, gb_a_dir, gb_a_oe, gb_d_dir, gb_d_oe;
+    logic [15:0] gb_a;
+    logic [7:0]  gb_d_o;
+    logic        gb_phi, gb_wr_n, gb_rd_n, gb_cs_n;
+
+    mirlo_regs #(.GB_CART_PRESENT(1'b1)) regs (
         .clk                    (clk),
         .rst                    (rst),
         .r_req                  (xr_go),
@@ -662,15 +698,66 @@ module n64_soc_gb #(
         .sn_a                   (),
         .sn_wd                  (),
         .sn_q                   (32'd0),
-        .gbc_on                 (),
-        .gbc_trust              (),
-        .gbc_start              (),
-        .gbc_we                 (),
-        .gbc_addr               (),
-        .gbc_wdata              (),
-        .gbc_busy               (1'b0),
-        .gbc_rdata              (8'd0)
+        .gbc_on                 (gbc_on),
+        .gbc_trust              (gbc_trust),
+        .gbc_start              (gbc_start),
+        .gbc_we                 (gbc_we),
+        .gbc_addr               (gbc_addr),
+        .gbc_wdata              (gbc_wdata),
+        .gbc_busy               (gbc_busy),
+        .gbc_present            (cart_sw_sync),
+        .gbc_rdata              (gbc_rdata)
     );
+
+    gb_cart u_gb_cart (
+        .clk        (clk),
+        .rst        (rst),
+        .sw_present (cart_sw_sync),
+        .on         (gbc_on),
+        .trust      (gbc_trust),
+        .start      (gbc_start),
+        .we         (gbc_we),
+        .addr       (gbc_addr),
+        .wdata      (gbc_wdata),
+        .busy       (gbc_busy),
+        .rdata      (gbc_rdata),
+        .gb_on      (gb_bus_on),
+        .gb_a_dir   (gb_a_dir),
+        .gb_a_oe    (gb_a_oe),
+        .gb_a       (gb_a),
+        .gb_d_o     (gb_d_o),
+        .gb_d_dir   (gb_d_dir),
+        .gb_d_oe    (gb_d_oe),
+        .gb_d_i     (cartridge_bank0In),
+        .gb_phi     (gb_phi),
+        .gb_wr_n    (gb_wr_n),
+        .gb_rd_n    (gb_rd_n),
+        .gb_cs_n    (gb_cs_n)
+    );
+
+    // CartridgePortV0 mapping for DMG/CGB Transfer Pak:
+    //   - Bank 0 (A16..A23, pins 22..29) : GB D0..D7
+    //   - Bank 1 (AD8..AD15, pins 14..21): GB A8..A15
+    //   - Bank 2 (AD0..AD7, pins 6..13)  : GB A0..A7
+    //   - Bank 3 ([3:0], pins 2..5)      : {PHI, nWR, nRD, nCS1}
+    //   - Pin 30 (nCS2, pin 30)          : GB nRST (open-drain: 0 in reset, input when running)
+    //   - Pin 31 (nIRQ, pin 31)          : GB VIN (input only)
+    // All level shifters & drivers disabled (`cartridge_enabled = 0`, `Dir = 0`)
+    // whenever `cart_sw_sync == 0` (empty slot or 3.3 V GBA cartridge).
+    assign cartridge_enabled  = cart_sw_sync;
+    assign cartridge_bank0Out = gb_d_o;
+    assign cartridge_bank0Dir = cart_sw_sync && gb_d_oe;
+    assign cartridge_bank1Out = gb_a[15:8];
+    assign cartridge_bank1Dir = cart_sw_sync && gb_a_oe;
+    assign cartridge_bank2Out = gb_a[7:0];
+    assign cartridge_bank2Dir = cart_sw_sync && gb_a_oe;
+    assign cartridge_bank3Out = cart_sw_sync ? {gb_phi, gb_wr_n, gb_rd_n, gb_cs_n} : 4'b1111;
+    assign cartridge_bank3Dir = cart_sw_sync;
+    assign cartridge_pin30Out = 1'b0;
+    assign cartridge_pin30Dir = cart_sw_sync && !gb_bus_on;
+    assign cartridge_pin31Out = 1'b0;
+    assign cartridge_pin31Dir = 1'b0;
+    wire _unused_gb_cart = &{1'b0, gb_a_dir, gb_d_dir};
 
     // -------------------------------------------------------------------------
     // 5. RSP (`rsp_top`, LANES=8) + `rdp_dpc` + `rdp_top`

@@ -672,7 +672,8 @@ int main(int argc, char **argv) {
     std::string arg_file;
     std::string n64rt_path  = "lang/n64rt/build/n64rt.bin";
     std::string savedb_path = "assets/n64savedb.txt";
-    int pak_setting = 1; // 1 = Controller Pak, 2 = Rumble Pak
+    int pak_setting = 1; // 1 = Controller Pak, 2 = Rumble Pak, 9 = Transfer Pak
+    int cart_switch = 0; // 0 = empty/GBA, 1 = physical DMG/CGB cartridge inserted
     bool test_restart = false;
     std::string dump_ppm;
     std::string dump_wav;
@@ -686,6 +687,7 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--n64rt") == 0 && i + 1 < argc) n64rt_path = argv[++i];
         else if (strcmp(argv[i], "--savedb") == 0 && i + 1 < argc) savedb_path = argv[++i];
         else if (strcmp(argv[i], "--pak") == 0 && i + 1 < argc) pak_setting = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--cart-switch") == 0 && i + 1 < argc) cart_switch = atoi(argv[++i]);
         else if (strcmp(argv[i], "--fps-mode") == 0 && i + 1 < argc) fps_mode = atoi(argv[++i]);
         else if (strcmp(argv[i], "--od-loading-ppm") == 0 && i + 1 < argc) g_od_loading_ppm = argv[++i];
         else if (strcmp(argv[i], "--test-restart") == 0) test_restart = true;
@@ -715,6 +717,7 @@ int main(int argc, char **argv) {
     dut->pad_axes_0               = 0x000018E8u; // LX=-24, LY=+24
     dut->pad_trig_0               = 0;
     dut->pad_btns_1               = 0;
+    dut->tb_cart_switch           = (cart_switch != 0) ? 1 : 0;
     dut->eval();
 
     for (int i = 0; i < 24; i++) step_sys_cycle();
@@ -895,6 +898,22 @@ int main(int argc, char **argv) {
         if (pak_setting == 2 && g_vibrate_cycles < 50) {
             TEST_ERR("Rumble Pak motor write 0xC000 did not assert VibrateV0 (%ld)", g_vibrate_cycles);
         }
+        if (dut->tb_cart_bus_err != 0) {
+            TEST_ERR("CartridgePortV0 / gb_cart bus timing or contention error count = %u", dut->tb_cart_bus_err);
+        }
+        if (pak_setting == 9) {
+            if (cart_switch == 0) {
+                if (pak_rep != 8u || dut->tb_cart_reads != 0u || dut->tb_cart_writes != 0u) {
+                    TEST_ERR("Empty/GBA Transfer Pak isolation failed: pak_rep=%u reads=%u writes=%u",
+                             pak_rep, dut->tb_cart_reads, dut->tb_cart_writes);
+                }
+            } else {
+                if (pak_rep != 9u || dut->tb_cart_reads < 150u || dut->tb_cart_writes < 120u) {
+                    TEST_ERR("Physical MBC3 Transfer Pak check failed: pak_rep=%u reads=%u writes=%u",
+                             pak_rep, dut->tb_cart_reads, dut->tb_cart_writes);
+                }
+            }
+        }
         if (is_ondemand && (g_cmd_core_getsize_cnt < 1 || g_cmd_core_read_cnt < 14)) {
             TEST_ERR("On-demand 64 MiB paging did not issue expected commandCore ops (getsize=%ld read=%ld)",
                      g_cmd_core_getsize_cnt, g_cmd_core_read_cnt);
@@ -904,7 +923,7 @@ int main(int argc, char **argv) {
         if (test_restart) {
             sdr_poke_word(report_w0, 0u);
             host_mem_wr(0x70000028u, 1u); // Trigger soft restart!
-            long rlim = g_sys + 15000000L;
+            long rlim = g_sys + 28000000L;
             while (g_sys < rlim && sdr_peek_word(report_w0) != 0x600DF00Du) {
                 step_sys_cycle();
             }
@@ -919,7 +938,7 @@ int main(int argc, char **argv) {
             sdr_poke_word(report_w0, 0u);
             host_cmd(0x0101u); // CoreHalt
             host_cmd(0x0100u); // CoreRun -> triggers clean soft restart!
-            long rlim2 = g_sys + 15000000L;
+            long rlim2 = g_sys + 28000000L;
             while (g_sys < rlim2 && sdr_peek_word(report_w0) != 0x600DF00Du) {
                 step_sys_cycle();
             }
@@ -928,6 +947,10 @@ int main(int argc, char **argv) {
             if (sdr_peek_word(report_w0) != 0x600DF00Du || boot_cnt3 != 3u || was_dirty3 != 0u) {
                 TEST_ERR("System-menu CoreHalt->CoreRun Reset failed: magic=0x%08x boot_cnt=%u (want 3) was_dirty=%u (want 0)",
                          sdr_peek_word(report_w0), boot_cnt3, was_dirty3);
+            }
+            if (dut->tb_cart_bus_err != 0 || (pak_setting == 9 && cart_switch != 0 && sdr_peek_word(report_w0 + 5) != 9u)) {
+                TEST_ERR("Post-reset Transfer Pak check failed: bus_err=%u pak_rep=%u",
+                         dut->tb_cart_bus_err, sdr_peek_word(report_w0 + 5));
             }
         }
 

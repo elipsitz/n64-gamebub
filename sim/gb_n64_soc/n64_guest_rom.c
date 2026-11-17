@@ -101,6 +101,39 @@ static volatile u8 *pif_bytes(void)
     return b;
 }
 
+static u16 joy_pak_addr(u16 a)
+{
+    a &= 0xFFE0u;
+    u32 reg = 0;
+    for (int i = 15; i >= 5; i--) {
+        int bit = ((a >> i) & 1u) ^ ((reg >> 4) & 1u);
+        reg = ((reg << 1) & 0x1Eu) ^ (bit ? 0x15u : 0u);
+    }
+    return (u16)(a | (reg & 0x1Fu));
+}
+
+static void joy_pak_wr_val(u16 a, u8 val)
+{
+    volatile u8 *b = pif_bytes();
+    u16 ac = joy_pak_addr(a);
+    b[0] = 35u; b[1] = 1u; b[2] = 0x03u;
+    b[3] = (u8)(ac >> 8); b[4] = (u8)ac;
+    for (int k = 0; k < 32; k++) b[5 + k] = val;
+    b[38] = 0xFEu;
+    pif_xfer();
+}
+
+static volatile u8 *joy_pak_rd(u16 a)
+{
+    volatile u8 *b = pif_bytes();
+    u16 ac = joy_pak_addr(a);
+    b[0] = 3u; b[1] = 33u; b[2] = 0x02u;
+    b[3] = (u8)(ac >> 8); b[4] = (u8)ac;
+    b[38] = 0xFEu;
+    pif_xfer();
+    return b + 5;
+}
+
 void guest_main(void)
 {
     /* Clear BSS manually */
@@ -226,22 +259,96 @@ void guest_main(void)
             REPORT[5] = 2u; /* Rumble Pak active */
             pass_mask |= 0x20u;
         } else {
-            /* Controller Pak detected! Write 32-byte test record at 0x0200 and verify readback */
-            b = pif_bytes();
-            b[0] = 35u; b[1] = 1u; b[2] = 0x03u; b[3] = 0x02u; b[4] = 0x00u;
-            for (int k = 0; k < 32; k++) b[5 + k] = (u8)(0x30u + k);
-            b[38] = 0xFEu;
-            pif_xfer();
+            /* Probe for Transfer Pak by writing 0x84 to 0x8000 */
+            joy_pak_wr_val(0x8000u, 0x84u);
+            volatile u8 *rd = joy_pak_rd(0x8000u);
+            if (rd[0] == 0x84u) {
+                /* Transfer Pak detected! Read 0xB000 status */
+                rd = joy_pak_rd(0xB000u);
+                u8 st0 = rd[0];
+                if (!(st0 & 0x80u)) {
+                    /* Transfer Pak present, physical slot empty */
+                    joy_pak_wr_val(0x8000u, 0xFEu);
+                    REPORT[5] = 8u;
+                    pass_mask |= 0x20u;
+                } else {
+                    int tp_ok = 1;
+                    /* Power on physical GB cartridge (0xB000 = 0x01) */
+                    joy_pak_wr_val(0xB000u, 0x01u);
+                    rd = joy_pak_rd(0xB000u);
+                    if ((rd[0] & 0x89u) != 0x89u) tp_ok = 0;
 
-            b = pif_bytes();
-            b[0] = 3u; b[1] = 33u; b[2] = 0x02u; b[3] = 0x02u; b[4] = 0x00u;
-            b[38] = 0xFEu;
-            pif_xfer();
+                    /* Bank 0 (0x0000..0x3FFF): verify GB ROM header title "GBUB TPAK TEST" across 0x0134..0x0141 */
+                    joy_pak_wr_val(0xA000u, 0x00u);
+                    rd = joy_pak_rd(0xC120u);
+                    static const char want_title[14] = "GBUB TPAK TEST";
+                    for (int k = 0; k < 12; k++)
+                        if (rd[0x14 + k] != (u8)want_title[k]) tp_ok = 0;
+                    rd = joy_pak_rd(0xC140u);
+                    for (int k = 0; k < 2; k++)
+                        if (rd[k] != (u8)want_title[12 + k]) tp_ok = 0;
 
-            int pak_ok = 1;
-            for (int k = 0; k < 32; k++) if (b[5 + k] != (u8)(0x30u + k)) pak_ok = 0;
-            REPORT[5] = 1u; /* Controller Pak active */
-            if (pak_ok) pass_mask |= 0x20u;
+                    /* Enable MBC3 SRAM (0x0000 = 0x0A) and switch ROM bank = 3 (0x2000 = 0x03) */
+                    joy_pak_wr_val(0xC000u, 0x0Au);
+                    joy_pak_wr_val(0xE000u, 0x03u);
+
+                    /* Bank 1 (0x4000..0x7FFF): verify ROM bank 3 signature at 0x7FE0 */
+                    joy_pak_wr_val(0xA000u, 0x01u);
+                    rd = joy_pak_rd(0xFFE0u);
+                    for (int k = 0; k < 32; k++)
+                        if (rd[k] != (u8)(0xB0u ^ 0x30u ^ (u8)k)) tp_ok = 0;
+
+                    /* Select MBC3 RAM bank 2 (0x4000 = 0x02) */
+                    joy_pak_wr_val(0xC000u, 0x02u);
+
+                    /* Bank 2 (0x8000..0xBFFF): write 32 bytes to GB SRAM 0xA120 (0xE120), switch RAM bank, and read back */
+                    joy_pak_wr_val(0xA000u, 0x02u);
+                    b = pif_bytes();
+                    u16 ac = joy_pak_addr(0xE120u);
+                    b[0] = 35u; b[1] = 1u; b[2] = 0x03u;
+                    b[3] = (u8)(ac >> 8); b[4] = (u8)ac;
+                    for (int k = 0; k < 32; k++) b[5 + k] = (u8)(0xD0u + k);
+                    b[38] = 0xFEu;
+                    pif_xfer();
+
+                    /* Switch MBC3 RAM bank to 1, verify 0xA120 is still 0xFF, then switch back to 2 and verify 0xD0 + k */
+                    joy_pak_wr_val(0xA000u, 0x01u);
+                    joy_pak_wr_val(0xC000u, 0x01u);
+                    joy_pak_wr_val(0xA000u, 0x02u);
+                    rd = joy_pak_rd(0xE120u);
+                    if (rd[0] != 0xFFu) tp_ok = 0;
+
+                    joy_pak_wr_val(0xA000u, 0x01u);
+                    joy_pak_wr_val(0xC000u, 0x02u);
+                    joy_pak_wr_val(0xA000u, 0x02u);
+                    rd = joy_pak_rd(0xE120u);
+                    for (int k = 0; k < 32; k++)
+                        if (rd[k] != (u8)(0xD0u + k)) tp_ok = 0;
+
+                    /* Power off physical GB cartridge */
+                    joy_pak_wr_val(0xB000u, 0x00u);
+                    REPORT[5] = 9u;
+                    if (tp_ok) pass_mask |= 0x20u;
+                }
+            } else {
+                /* Controller Pak detected! Write 32-byte test record at 0x0200 and verify readback */
+                joy_pak_wr_val(0x8000u, 0xFEu);
+                b = pif_bytes();
+                b[0] = 35u; b[1] = 1u; b[2] = 0x03u; b[3] = 0x02u; b[4] = 0x00u;
+                for (int k = 0; k < 32; k++) b[5 + k] = (u8)(0x30u + k);
+                b[38] = 0xFEu;
+                pif_xfer();
+
+                b = pif_bytes();
+                b[0] = 3u; b[1] = 33u; b[2] = 0x02u; b[3] = 0x02u; b[4] = 0x00u;
+                b[38] = 0xFEu;
+                pif_xfer();
+
+                int pak_ok = 1;
+                for (int k = 0; k < 32; k++) if (b[5 + k] != (u8)(0x30u + k)) pak_ok = 0;
+                REPORT[5] = 1u; /* Controller Pak active */
+                if (pak_ok) pass_mask |= 0x20u;
+            }
         }
     } else {
         REPORT[5] = 0u;

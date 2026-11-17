@@ -9,6 +9,7 @@
       "items": [
         { "label": "Controller Pak", "value": "0x1" },
         { "label": "Rumble Pak",     "value": "0x2" },
+        { "label": "Transfer Pak",   "value": "0x9" },
         { "label": "None",           "value": "0x0" }
       ]
     },

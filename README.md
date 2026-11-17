@@ -29,6 +29,7 @@ Nintendo 64 FPGA core for the **Game Bub Rev4** handheld (`XC7A100TCSG324-1`), a
   - `VideoV0(320, 240, 6, 6, 6)` (`n64_video_gb_downsampler.sv`): `640->320` horizontal blend + `480i/p->240p` vertical weave de-interlacing + `2x2` Bayer ordered dithering (`RGB888 -> RGB666`) + optional zero-BRAM `Top-Right` / `Top-Left` live N64 `FPS Counter` badge, scaled `2x` by `HandheldTop` to `640x480` (4:3) on both LCD and Dock HDMI.
   - `AudioV0`: Exact `48,000.000 Hz` (`12 / 15,625` of `62.5 MHz`) 16-bit stereo ring buffer fed by `rcp_ai`.
   - `InputExtendedV0(numSlots = 4)` + `VibrateV0`: Up to 4 docked analog/digital gamepads + handheld `R`-modifier C-button presets + Player 1 Rumble Pak motor support.
+  - `CartridgePortV0` (`gb_cart.sv` + `n64rt_pak.c`): Physical Game Boy / Game Boy Color **Transfer Pak** support on Player 1 (`976.6 kHz` `PHI` bus, hardware `cartridge.switch` 5 V DMG/CGB detection & 3.3 V GBA/empty isolation, open-drain `nRST`, Nintendo logo/header checksum `TRUST` write-protection, and live cartridge hot-swap detection).
 
 ---
 
@@ -38,7 +39,7 @@ Nintendo 64 FPGA core for the **Game Bub Rev4** handheld (`XC7A100TCSG324-1`), a
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | **`N64MemDiagCore`** (`01-mem-diag`) | `7,122` (`11.23%`) | `3,977` (`3.14%`) | `86.5` (`64.07%`) | `0` (`0.00%`) | **`+0.585`** | **`+0.052`** | **`+2.167`** | `573,277 B` |
 | **`N64SelfTestCore`** (`02-mips-self-test`) | `36,240` (`57.16%`) | `20,432` (`16.11%`) | `128.5` (`95.19%`) | `45` (`18.75%`) | **`+0.077`** | **`+0.050`** | **`+2.167`** | `2,676,349 B` |
-| **`N64Core`** (`03..05` Production Core) | **`36,067` (`56.89%`)** | **`20,339` (`16.04%`)** | **`123.5` (`91.48%`)** | **`35` (`14.58%`)** | **`+0.207`** | **`+0.006`** | **`+2.167`** | **`2,598,305 B`** |
+| **`N64Core`** (`03..05` Production Core) | **`36,095` (`56.93%`)** | **`20,432` (`16.11%`)** | **`123.5` (`91.48%`)** | **`35` (`14.58%`)** | **`+0.291`** | **`+0.012`** | **`+2.167`** | **`2,652,821 B`** |
 
 All three bitstreams build with **`0` Critical Warnings, `0` DRC Errors, `0` latches, 100% IOB-packed SDRAM/SRAM buses (`36 ps` pin-to-pin DQ skew, `+8.960 ns` physical 10 ns Async SRAM read setup margin), `0.000 ns` `TNS`/`THS`, and 100% Vivado gate-vs-RTL `xsim` lockstep equivalence (`rsp_top`, `rcp_ai`, `mips_sys`, `rdp_top`)**.
 
@@ -55,7 +56,7 @@ Each folder under `dist/<bundle>/cores/` can be copied directly onto the root `c
    - Needs **no ROM files**. Boots embedded MIPS64 firmware (`rtl/diag/n64_selftest.hex`) exercising `VR4300` 64-bit integer + `COP1` FPU, `64 MiB` SDRAM + `512 KiB` SRAM, 8-lane `RSP` vector unit, `RDP` 3D triangle rasterization (`VI` -> `VideoV0` color bars + live 4-slot controller viewer), `rcp_ai` 440 Hz stereo audio, and Rumble (`Hold A`).
 3. **`dist/03-n64-core/cores/GameBub.N64/` (and `dist/04-n64-polished/cores/GameBub.N64/`) — Full N64 Core (Eager ROM Load up to `52 MiB`)**
    - Copy `cores/GameBub.N64/` to `/cores/GameBub.N64/` on your microSD card and place `.z64`, `.n64`, or `.v64` ROMs in your ROMs folder.
-   - Automatically byteswaps `.v64`/`.n64` images in hardware, detects save type (`EEPROM 4K/16K`, `SRAM 32K`, `FlashRAM 128K`) via `n64savedb.txt` and `?ED?` homebrew ROM headers, persists `.sav` and `.mpk` files via `HostV0`, and exposes Pak type, handheld control presets, deadzone, Expansion Pak toggle, `VI Deblur`, overscan crop, and `Restart Game` in `settings.json`.
+   - Automatically byteswaps `.v64`/`.n64` images in hardware, detects save type (`EEPROM 4K/16K`, `SRAM 32K`, `FlashRAM 128K`) via `n64savedb.txt` and `?ED?` homebrew ROM headers, persists `.sav` and `.mpk` files via `HostV0`, supports physical GB/GBC cartridges via **Transfer Pak** (`Controller 1 Pak = Transfer Pak`), and exposes Pak type, handheld control presets, deadzone, Expansion Pak toggle, `VI Deblur`, overscan crop, and `Restart Game` in `settings.json`.
 4. **`dist/05-n64-64mb-ondemand/cores/GameBub.N64/` — Phase 5 `64 MiB` On-Demand Paging Bundle**
    - Identical `N64Core` bitstream paired with `on_demand: true` `files.json` (`metadata/files_ondemand.json`), displaying a live on-screen `"NINTENDO 64 / LOADING ROM..."` progress bar while streaming up to `51 MiB` into resident SDRAM plus `64 KiB` tail pages (`51..64 MiB`) on demand via `HostV0` Core->Host commands (`0x0400` `FileGetSize` & `0x0402` `FileRead`) to support `64 MiB` titles (*Resident Evil 2*, *Pokemon Stadium 2*, *Conker's Bad Fur Day*, *Paper Mario*).
    - For standard `<= 52 MiB` cartridges (*Super Mario 64*, *Mario Kart 64*, *Animal Forest*, *Ocarina of Time*, *Majora's Mask*, *Banjo-Kazooie*), `03-n64-core` / `04-n64-polished` eagerly stream the entire ROM during MCU `Setup` using Game Bub's native `"Loading..."` screen with zero in-game SD paging latency.
