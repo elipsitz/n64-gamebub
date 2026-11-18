@@ -1,4 +1,4 @@
-# Game Bub Nintendo 64 FPGA Core (`GameBub.N64`)
+# Game Bub Nintendo 64 FPGA Core (`Eli.N64`)
 
 Nintendo 64 FPGA core for the **Game Bub Rev4** handheld (`XC7A100TCSG324-1`), adapting the clean-room [MIRLO64](https://github.com/tortugaveloz/MIRLO64) architecture (`Apache-2.0`) onto [`gamebub/framework`](https://github.com/gamebub/framework).
 
@@ -54,10 +54,10 @@ Each folder under `dist/<bundle>/cores/` can be copied directly onto the root `c
    - Top banner turns **solid green** once Pass 1 completes with `0` errors; use `D-Pad Left/Right` or Core Settings (`SDRAM Clock Phase`) to sweep `sdram_clk` fine phase if characterizing board margins, and hold `B` to test `48 kHz` audio + rumble motor.
 2. **`dist/02-mips-self-test/cores/GameBub.N64SelfTest/` — Self-Contained VR4300 + RSP + RDP + Audio + Input Self-Test**
    - Needs **no ROM files**. Boots embedded MIPS64 firmware (`rtl/diag/n64_selftest.hex`) exercising `VR4300` 64-bit integer + `COP1` FPU, `64 MiB` SDRAM + `512 KiB` SRAM, 8-lane `RSP` vector unit, `RDP` 3D triangle rasterization (`VI` -> `VideoV0` color bars + live 4-slot controller viewer), `rcp_ai` 440 Hz stereo audio, and Rumble (`Hold A`).
-3. **`dist/03-n64-core/cores/GameBub.N64/` (and `dist/04-n64-polished/cores/GameBub.N64/`) — Full N64 Core (Eager ROM Load up to `52 MiB`)**
-   - Copy `cores/GameBub.N64/` to `/cores/GameBub.N64/` on your microSD card and place `.z64`, `.n64`, or `.v64` ROMs in your ROMs folder.
-   - Automatically byteswaps `.v64`/`.n64` images in hardware, detects save type (`EEPROM 4K/16K`, `SRAM 32K`, `FlashRAM 128K`) via `n64savedb.txt` and `?ED?` homebrew ROM headers, persists `.sav` and `.mpk` files via `HostV0`, supports physical GB/GBC cartridges via **Transfer Pak** (`Controller 1 Pak = Transfer Pak`), and exposes Pak type, handheld control presets, deadzone, Expansion Pak toggle, `VI Deblur`, overscan crop, and `Restart Game` in `settings.json`.
-4. **`dist/05-n64-64mb-ondemand/cores/GameBub.N64/` — Phase 5 `64 MiB` On-Demand Paging Bundle**
+3. **`dist/03-n64-core/cores/Eli.N64/` (and `dist/04-n64-polished/cores/Eli.N64/`) — Full N64 Core (Eager ROM Load up to `52 MiB`)**
+   - Copy `cores/Eli.N64/` to `/cores/Eli.N64/` on your microSD card and place `.z64`, `.n64`, or `.v64` ROMs in your ROMs folder.
+   - Automatically byteswaps `.v64`/`.n64` images in hardware, detects save type (`EEPROM 4K/16K`, `SRAM 32K`, `FlashRAM 128K`) via `n64savedb.txt` and `?ED?` homebrew ROM headers, persists `.sav` and `.mpk` files via `HostV0`, supports physical GB/GBC cartridges via **Transfer Pak** (`Controller 1 Pak = Transfer Pak`), and exposes Pak type, handheld control presets, N64 D-Pad mapping, deadzone, Expansion Pak toggle, `VI Deblur`, overscan crop, and `Restart Game` in `settings.json`.
+4. **`dist/05-n64-64mb-ondemand/cores/Eli.N64/` — Phase 5 `64 MiB` On-Demand Paging Bundle**
    - Identical `N64Core` bitstream paired with `on_demand: true` `files.json` (`metadata/files_ondemand.json`), displaying a live on-screen `"NINTENDO 64 / LOADING ROM..."` progress bar while streaming up to `51 MiB` into resident SDRAM plus `64 KiB` tail pages (`51..64 MiB`) on demand via `HostV0` Core->Host commands (`0x0400` `FileGetSize` & `0x0402` `FileRead`) to support `64 MiB` titles (*Resident Evil 2*, *Pokemon Stadium 2*, *Conker's Bad Fur Day*, *Paper Mario*).
    - For standard `<= 52 MiB` cartridges (*Super Mario 64*, *Mario Kart 64*, *Animal Forest*, *Ocarina of Time*, *Majora's Mask*, *Banjo-Kazooie*), `03-n64-core` / `04-n64-polished` eagerly stream the entire ROM during MCU `Setup` using Game Bub's native `"Loading..."` screen with zero in-game SD paging latency.
 
@@ -86,7 +86,7 @@ python3 tools/package_dist.py --bundle n64
 
 ## 5. Framework Notes & Upstream Proposals
 
-`GameBub.N64` builds against **100% unmodified** upstream [`gamebub/framework`](https://github.com/gamebub/framework) (`f2b000c`). See [`docs/FRAMEWORK_PROPOSALS.md`](docs/FRAMEWORK_PROPOSALS.md) for:
+`Eli.N64` builds against **100% unmodified** upstream [`gamebub/framework`](https://github.com/gamebub/framework) (`f2b000c`). See [`docs/FRAMEWORK_PROPOSALS.md`](docs/FRAMEWORK_PROPOSALS.md) for:
 1. Notes on `(* IOB = "TRUE" *)` scalar-to-vector `OLOGICE2.TFF` auto-replication across `HandheldTop` (`SdramV0`/`SramV0`).
 2. **Option B Upstream RFC:** Cycle-accurate `10 ns` `IS61WV25616EDBLL-10TLI` SRAM display framebuffer interleaving design for `HandheldTop.scala` (reclaiming `73.0` `RAMB36E1`s for future cores that do not use `SramV0`).
 

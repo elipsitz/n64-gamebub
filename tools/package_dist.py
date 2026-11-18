@@ -34,7 +34,7 @@ BUNDLES = {
         "with_runtime": False,
     },
     "03-n64-core": {
-        "core_id": "GameBub.N64",
+        "core_id": "Eli.N64",
         "core_class": "N64Core",
         "core_json": "metadata/core.json",
         "files_json": "metadata/files.json",
@@ -42,7 +42,7 @@ BUNDLES = {
         "with_runtime": True,
     },
     "04-n64-polished": {
-        "core_id": "GameBub.N64",
+        "core_id": "Eli.N64",
         "core_class": "N64Core",
         "core_json": "metadata/core.json",
         "files_json": "metadata/files.json",
@@ -50,7 +50,7 @@ BUNDLES = {
         "with_runtime": True,
     },
     "05-n64-64mb-ondemand": {
-        "core_id": "GameBub.N64",
+        "core_id": "Eli.N64",
         "core_class": "N64Core",
         "core_json": "metadata/core.json",
         "files_json": "metadata/files_ondemand.json",
