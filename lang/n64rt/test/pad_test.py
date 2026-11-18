@@ -23,48 +23,70 @@ def spec(keys, joy, s0, s1):
         dlx, dly = (joy & 255) - 128, ((joy >> 8) & 255) - 128
         for cond, key in ((dlx < -32, 'left'), (dlx > 32, 'right'), (dly < -32, 'up'), (dly > 32, 'down')):
             if cond: held.discard(key)
-    face, half = ((s0 >> 10) & 31) == 1, ((s0 >> 10) & 31) == 2   # "R as modifier" interact0[14:10]: 1 face C buttons, 2 half press
-    mod_key = 'R1' if face or half else None
+    scode = s1 & 15                               # Handheld Select / Start mode (`set1[3:0]`)
+    legacy_trig = (s1 & 0x10) != 0                # Docked Triggers (`set1[4]`): 0 Standard, 1 MIRLO Legacy
+    if not analog and scode == 0 and 'select' in held:
+        for key, nbtn in (('L1', 'L'), ('R1', 'R'), ('up', 'DUP'), ('down', 'DDOWN'),
+                          ('left', 'DLEFT'), ('right', 'DRIGHT'), ('X', 'CUP'), ('B', 'CDOWN'),
+                          ('Y', 'CLEFT'), ('A', 'CRIGHT'), ('start', 'START')):
+            if key in held:
+                out.add(nbtn)
+        return sum(N[n] for n in out), 0, 0
+
+    rm = (s0 >> 10) & 31                          # "Handheld R Mode" (`set0[14:10]`): applies only when `!analog`
+    face = (not analog) and rm == 1
+    half = (not analog) and rm == 2
+    r_is_l = (not analog) and rm == 3
+    mod_key = 'R1' if (face or half or r_is_l) else None
     rmod = mod_key is not None and mod_key in held
     if mod_key:
-        held.discard(mod_key)                     # R, so used, never reaches the game
-    if rmod and face:                             # face buttons become the C buttons where they sit
-        for face, c in (('X', 'CUP'), ('B', 'CDOWN'), ('Y', 'CLEFT'), ('A', 'CRIGHT')):
-            if face in held:
+        held.discard(mod_key)
+    if rmod and face:
+        for face_k, c in (('X', 'CUP'), ('B', 'CDOWN'), ('Y', 'CLEFT'), ('A', 'CRIGHT')):
+            if face_k in held:
                 out.add(c)
         held -= {'A', 'B', 'X', 'Y'}
-    scode = s1 & 31                               # "Start button" is interact1[4:0]: a button code (0 the Start key), 12 Select+Start
-    if 12 <= scode <= 18:                         # a Start macro: Select+Start, or two C buttons (C-left Y, C-right X, C-down Select, C-up ZR)
-        chord = {12: {'select', 'start'}, 13: {'Y', 'X'}, 14: {'select', 'R2'}, 15: {'select', 'Y'}, 16: {'select', 'X'},
-                 17: {'R2', 'Y'}, 18: {'R2', 'X'}}[scode]
+    if rmod and r_is_l:
+        out.add('L')
+
+    if 12 <= scode <= 15:
+        chord = {12: {'select', 'start'}, 13: {'Y', 'X'}, 14: {'select', 'R2'}, 15: {'select', 'Y'}}[scode]
         if chord <= held:
             out.add('START')
             held -= chord
         elif 'start' in held:
-            out.add('CUP')                        # the Start key the chord leaves: C-up
+            out.add('CUP')
+    elif scode == 0:
+        if 'start' in held:
+            out.add('START')
+        held.discard('start')
+        held.discard('select')
     else:
-        skey = 'start' if scode == 0 else CODE.get(scode)
+        skey = CODE.get(scode, 'start')
         if skey in held:
             out.add('START')
         if skey != 'start' and 'start' in held:
-            out.add('CUP')                        # a Start key the setting leaves: C-up
-        held.discard(skey)                        # the Start's key is that only
-    if 'R2' in held:                              # C-up: ZR (the Controls menu moves it)
-        out.add('CUP')
+            out.add('CUP')
+        held.discard(skey)
+
     if 'A' in held: out.add('A')
     if 'B' in held: out.add('B')
-    # Z, L, R: (setting, its own default for code 0)
-    if 'L1' in held: out.add('Z')                 # Z and R: the Pocket's L and R keys (the Controls menu moves them)
-    if 'R1' in held: out.add('R')
-    if 'L2' in held: out.add('L')                 # L: ZL (the Controls menu moves it)
-    for name, code, dflt in ():
-        key = dflt if code == 0 else CODE.get(code)
-        if key and key in held:
-            out.add(name)
+    if analog and not legacy_trig:
+        if 'L1' in held: out.add('L')
+        if 'R1' in held: out.add('R')
+        if 'L2' in held or 'R2' in held: out.add('Z')
+    else:
+        if 'L1' in held: out.add('Z')
+        if 'L2' in held: out.add('L')
+        if 'R1' in held: out.add('R')
+        if 'R2' in held: out.add('CUP')
+
     # joystick bytes: left X, left Y, right X, right Y (0x80 centre)
     lx, ly, rx, ry = (joy >> 0) & 255, (joy >> 8) & 255, (joy >> 16) & 255, (joy >> 24) & 255
-    # the C buttons are on the face buttons always (Y left, X right, Select down; up only through the R modifier) ...
-    for key, c in (('Y', 'CLEFT'), ('X', 'CRIGHT'), ('select', 'CDOWN')):
+    # the C buttons are on the face buttons (`Select` = C-Down only when scode != 0)
+    if scode != 0 and 'select' in held:
+        out.add('CDOWN')
+    for key, c in (('Y', 'CLEFT'), ('X', 'CRIGHT')):
         if key in held: out.add(c)
     # ... and "C buttons" 1 adds the right stick, 2 the left one
     cm = (s1 >> 10) & 31
@@ -108,8 +130,8 @@ def spec(keys, joy, s0, s1):
         sx, sy = 0, 0                             # none: centred
     else:
         sx, sy = dpad_stick()                     # D-pad, or an unknown value
-    dmode = (s1 >> 22) & 3                        # the N64's D-pad: 0 none, 1 the D-pad, 2 L stick, 3 R stick
-    if dmode == 1:
+    dmode = (s1 >> 22) & 3                        # N64 D-Pad: 0 Auto (Gamepad), 1 Always D-Pad, 2 L Stick, 3 R Stick
+    if dmode == 1 or (dmode == 0 and analog):
         for key, c in (('up', 'DUP'), ('down', 'DDOWN'), ('left', 'DLEFT'), ('right', 'DRIGHT')):
             if key in held: out.add(c)
     elif dmode in (2, 3) and analog:
@@ -123,12 +145,10 @@ def spec(keys, joy, s0, s1):
 
 def settings():
     """every combination of the settings' values (valid ones, and invalid codes)"""
-    for mod, z, l, r, c, stick, dpad, start in itertools.product(
-            (0, 1, 2, 3, 4, 5, 9), (0, 1, 4, 5, 15, 10, 11, 31), (0, 1, 2, 3, 7, 13), (0, 1, 2, 8, 11),
-            (0, 1, 2, 3), (0, 1, 2, 3, 9), (0, 1, 2, 3), (0, 1, 2, 3)):
-        s0 = mod << 10 | l << 20 | r << 25 | 3 << 5 | 1 << 15 | 2             # (crop, pak: other fields, ignored here)
-        sc = (0, 15, 13, 14, 16, 12, 17, 18)[(mod + z + l + r + c + stick + dpad + start) % 8]   # "Start button", spread over the rest
-        s1 = sc | z << 5 | c << 10 | stick << 15 | start << 20 | dpad << 22 | 1 << 24 | 1 << 25   # (start: "C-Up button"; the free bits)
+    for mod, trig, scode_v, c, stick, dpad in itertools.product(
+            (0, 1, 2, 3, 9), (0, 1), (0, 11, 12, 13), (0, 1, 2, 3), (0, 1, 2, 3, 9), (0, 1, 2, 3)):
+        s0 = mod << 10 | 3 << 5 | 1 << 15 | 2
+        s1 = (scode_v | (trig << 4)) | 0 << 5 | c << 10 | stick << 15 | dpad << 22 | 1 << 24 | 1 << 25
         yield s0, s1
 
 
@@ -194,22 +214,28 @@ def main():
         offset = ((case[1] >> (0 if mode == 1 else 16)) & 255) - 128
         assert int(y) == 0 and (int(x) == 0 if offset == edge else int(x) > 0)
         if offset == 127: assert int(x) == 80
-    # the defaults: Z on L, L button on ZL, R on R, face-button C buttons, the D-pad is the stick, Start is Start, no modifier
-    d = lambda k: spec(k | 1 << 28, 0x80808080, 0, 0)
-    assert d(1 << K['L1']) == (N['Z'], 0, 0)
-    assert d(1 << K['R1']) == (N['R'], 0, 0)
-    assert d(1 << K['L2']) == (N['L'], 0, 0) and d(1 << K['R2']) == (N['CUP'], 0, 0)   # the N64's L is on ZL, C-up on ZR by default
-    assert d(1 << K['start']) == (N['START'], 0, 0)
-    up = spec(3 << 28 | 1 << K['up'], 0x80801080, 0, 1 << 15 | 1 << 22)     # D-pad on the D-pad, Stick on L stick: the stick up and the dock's copy
-    assert up[0] & N['DUP'] == 0 and up[2] > 0
+    # Handheld defaults (`set0 = 1 << 10`, `set1 = 0`): L -> Z, R+ABXY -> C-Btns, Select Shift -> L/R/D-Pad/C-Btns
+    hh = lambda k: spec(k | 1 << 28, 0x80808080, 1 << 10, 0)
+    assert hh(1 << K['L1']) == (N['Z'], 0, 0)
+    assert hh(1 << K['start']) == (N['START'], 0, 0)
+    assert hh(1 << K['left']) == (0, -80, 0)
+    assert hh(1 << K['Y']) == (N['CLEFT'], 0, 0) and hh(1 << K['X']) == (N['CRIGHT'], 0, 0)
+    assert hh(1 << K['R1'] | 1 << K['X']) == (N['CUP'], 0, 0)
+    assert hh(1 << K['select'] | 1 << K['L1']) == (N['L'], 0, 0)
+    assert hh(1 << K['select'] | 1 << K['R1']) == (N['R'], 0, 0)
+    assert hh(1 << K['select'] | 1 << K['up']) == (N['DUP'], 0, 0)
+    assert hh(1 << K['select'] | 1 << K['B']) == (N['CDOWN'], 0, 0)
+    # Docked Analog Gamepad (`type == 3`) out of the box (`set0 = 1 << 10`, `set1 = 1 << 10 | 1 << 15`):
+    dk = lambda k, j=0x80808080: spec(k | 3 << 28, j, 1 << 10, 1 << 10 | 1 << 15)
+    assert dk(1 << K['L1']) == (N['L'], 0, 0)
+    assert dk(1 << K['R1']) == (N['R'], 0, 0) and dk(1 << K['R1'] | 1 << K['A']) == (N['R'] | N['A'], 0, 0)
+    assert dk(1 << K['L2']) == (N['Z'], 0, 0) and dk(1 << K['R2']) == (N['Z'], 0, 0)
+    assert dk(1 << K['up']) == (N['DUP'], 0, 0)
+    assert dk(1 << K['select']) == (0, 0, 0)
     c1 = lambda joy: spec(3 << 28, joy, 0, 1 << 10)                                    # "C buttons" on the right stick
     assert c1(0xF0608080) == (N['CDOWN'], 0, 0) and c1(0x10A08080) == (N['CUP'], 0, 0)    # (a little off down / up: that one only)
     assert c1(0x60F08080) == (N['CRIGHT'], 0, 0) and c1(0x10108080) == (N['CUP'], 0, 0)   # (45 degrees exactly: up)
-    assert d(1 << K['Y']) == (N['CLEFT'], 0, 0) and d(1 << K['X']) == (N['CRIGHT'], 0, 0) and d(1 << K['select']) == (N['CDOWN'], 0, 0)
-    assert d(1 << K['start']) == (N['START'], 0, 0)
-    assert d(1 << K['left']) == (0, -80, 0)
-    assert spec(3 << 28 | 1 << K['Y'], 0x80808080, 0, 1 << 10) == (N['CLEFT'], 0, 0)      # the face buttons stay with the right stick on
-    assert spec(3 << 28 | 1 << K['left'], 0x80808080, 0, 0) == (0, -80, 0)      # the default Stick is the D-pad whatever the pad
+    assert spec(3 << 28 | 1 << K['Y'], 0x80808080, 0, 1 << 10) == (N['CLEFT'], 0, 0)      # face C-Left stays with right stick on
     print('pad_test: %d cases, %d settings x words: %s' % (len(cases), len(sets), 'FAIL (%d)' % bad if bad else 'PASS'))
     return 1 if bad else 0
 

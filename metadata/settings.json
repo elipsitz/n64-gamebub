@@ -22,7 +22,33 @@
       "items": [
         { "label": "R + ABXY = C-Btns", "value": "0x1" },
         { "label": "R + DPad = Walk",   "value": "0x2" },
-        { "label": "Normal N64 R",      "value": "0x0" }
+        { "label": "Normal N64 R",      "value": "0x0" },
+        { "label": "R = N64 L Trigger", "value": "0x3" }
+      ]
+    },
+    {
+      "id": 13,
+      "label": "Handheld Select",
+      "address": "0x70000038",
+      "mask": "0xFFFFFFF0",
+      "type": "list",
+      "default": "0x0",
+      "items": [
+        { "label": "Shift (L/R/DPad/C)", "value": "0x0" },
+        { "label": "C-Down (Classic)",   "value": "0xB" },
+        { "label": "Start = Sel+Start",  "value": "0xC" }
+      ]
+    },
+    {
+      "id": 14,
+      "label": "Docked Triggers",
+      "address": "0x70000038",
+      "mask": "0xFFFFFFEF",
+      "type": "list",
+      "default": "0x0",
+      "items": [
+        { "label": "L/R + L2/R2=Z",      "value": "0x0" },
+        { "label": "MIRLO (L1=Z, R2=C)", "value": "0x10" }
       ]
     },
     {
@@ -56,10 +82,10 @@
       "type": "list",
       "default": "0x0",
       "items": [
-        { "label": "Off",         "value": "0x0" },
-        { "label": "D-Pad",       "value": "0x1" },
-        { "label": "Left Stick",  "value": "0x2" },
-        { "label": "Right Stick", "value": "0x3" }
+        { "label": "Auto (Gamepad)",  "value": "0x0" },
+        { "label": "Always D-Pad",    "value": "0x1" },
+        { "label": "Left Stick",      "value": "0x2" },
+        { "label": "Right Stick",     "value": "0x3" }
       ]
     },
     {

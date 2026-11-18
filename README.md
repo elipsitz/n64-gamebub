@@ -63,7 +63,57 @@ Each folder under `dist/<bundle>/cores/` can be copied directly onto the root `c
 
 ---
 
-## 4. Verification & Rebuilding from Source
+## 4. Controls & In-Core Settings (`metadata/settings.json`)
+
+Input mapping (`lang/n64rt/n64rt_pad.h`) automatically adapts to whether you are playing on **Game Bub's built-in handheld controls** or with **docked gamepads** (`InputExtendedV0` slots 1–4):
+
+### Docked Analog Gamepad (Out of the Box)
+Every N64 control maps natively 1-to-1 with zero modifier chords (`Handheld R Mode` and `Select Shift` never interfere with docked analog controllers):
+
+| N64 Control | Gamepad Input (Default) | Notes |
+| :--- | :--- | :--- |
+| **Analog Stick** | **Left Stick** | 13% radial deadzone (adjustable via `Stick Deadzone`) |
+| **C-Up / Down / Left / Right** | **Right Stick** | Push >50% on dominant axis (`Y` = `C-Left`, `X` = `C-Right` also active as extras) |
+| **D-Pad** | **D-Pad** | Enabled automatically when docked (`N64 D-Pad = Auto (Gamepad)`) |
+| **`L` / `R` Triggers** | **`L1` / `R1`** | `Docked Triggers = MIRLO` swaps to legacy `L1=Z`, `L2=L`, `R1=R`, `R2=C-Up` |
+| **`Z` Trigger** | **`L2 / LT` and `R2 / RT`** | Either analog/digital trigger presses N64 `Z` |
+| **`A` / `B` / `Start`** | **`A` / `B` / `Start`** | Direct 1:1 |
+
+### Game Bub Handheld (Built-In Controls)
+With defaults (`Handheld R Mode = R + ABXY = C-Btns`, `Handheld Select = Shift (L/R/DPad/C)`), **all 14 N64 buttons + Analog Stick** are accessible in-game:
+
+| Input | Normal Press | Hold `R` (Default `R + ABXY`) | Hold `Select` (Default `Shift Layer`) |
+| :--- | :--- | :--- | :--- |
+| **D-Pad** | N64 **Analog Stick** (`100%`) | N64 **Analog Stick** | **N64 D-Pad** (Stick centered) |
+| **`A` / `B`** | **N64 `A`** / **N64 `B`** | **`C-Right`** / **`C-Down`** | **`C-Right`** / **`C-Down`** |
+| **`Y` / `X`** | **`C-Left`** / **`C-Right`** | **`C-Left`** / **`C-Up`** | **`C-Left`** / **`C-Up`** |
+| **`L` / `R`** | **N64 `Z`** / *(C-Btn modifier)* | **N64 `Z`** / — | **N64 `L`** / **N64 `R`** |
+| **`Start`** | **N64 `Start`** | **N64 `Start`** | **N64 `Start`** |
+
+> **Tip:** For games that use **`R` directly** (such as *Mario Kart 64*, *F-Zero X*, or shielding in *Zelda: Ocarina of Time*), switch **`Handheld R Mode`** to **`Normal N64 R`** — you can still press all four C-buttons via **`Select + X/B/Y/A`** (or switch **`Handheld Select`** to **`Start = Sel+Start`** to put `C-Up` on the standalone `Start` button and `C-Down` on `Select`).
+
+### Core Settings Reference
+
+| Setting | Options (`*` = Default) | Behavior |
+| :--- | :--- | :--- |
+| **`Controller 1 Pak`** | `Controller Pak*`, `Rumble Pak`, `Transfer Pak`, `None` | Player 1 accessory (`Transfer Pak` reads physical DMG/CGB carts in the cartridge slot) |
+| **`Handheld R Mode`** | `R + ABXY = C-Btns*`, `R + DPad = Walk`, `Normal N64 R`, `R = N64 L Trigger` | Role of handheld `R` shoulder (`Walk` = 60% stick deflection) |
+| **`Handheld Select`** | `Shift (L/R/DPad/C)*`, `C-Down (Classic)`, `Start = Sel+Start` | Role of handheld `Select` (`Start = Sel+Start` frees `Start` as `C-Up`) |
+| **`Docked Triggers`** | `L/R + L2/R2=Z*`, `MIRLO (L1=Z, R2=C)` | Standard 4-shoulder gamepad layout vs legacy `MIRLO64` Pocket Dock triggers |
+| **`Analog Stick`** | `L-Stick / D-Pad*`, `D-Pad Only`, `Right Stick` | Analog Stick source (`L-Stick / D-Pad` falls back to D-Pad on handheld) |
+| **`C-Buttons Extra`** | `Right Stick*`, `Face Only`, `D-Pad` | Additional source for `C-Up / C-Down / C-Left / C-Right` |
+| **`N64 D-Pad`** | `Auto (Gamepad)*`, `Always D-Pad`, `Left Stick`, `Right Stick` | N64 D-Pad source (`Auto` enables D-Pad on docked gamepads only) |
+| **`Stick Deadzone`** | `13% (Default)*`, `0%`, `10%`, `20%`, `30%` | Radial analog deadzone for docked sticks |
+| **`4MB RDRAM Only`** | Unchecked (`8 MiB Expansion Pak`)* / Checked (`4 MiB`) | Toggle Expansion Pak visibility |
+| **`VI Deblur`** | Unchecked* / Checked | Toggle VI de-blur |
+| **`Scaling Filter`** | `Smooth + Dither*`, `Crisp + Dither`, `Smooth Raw 6b`, `Crisp Raw 6b` | Downsampler horizontal blend & `2x2` Bayer dithering |
+| **`Crop Overscan`** | `Off*`, `4 Lines`, `8 Lines`, `12 Lines` | Crop black overscan borders |
+| **`Restart Game`** | Action | Soft-restarts the N64 console (`Cartridge + Pak` states preserved) |
+| **`FPS Counter`** | `Top-Right*`, `Top-Left`, `Off` | Toggle zero-BRAM live N64 VI/RDP FPS HUD badge |
+
+---
+
+## 5. Verification & Rebuilding from Source
 
 ### Run Verilator Suites (via `mirlo64-tools` Docker image)
 ```bash
@@ -84,7 +134,7 @@ export PATH="$HOME/Xilinx2023.2/Vivado/2023.2/bin:$PATH"
 python3 tools/package_dist.py --bundle n64
 ```
 
-## 5. Framework Notes & Upstream Proposals
+## 6. Framework Notes & Upstream Proposals
 
 `Eli.N64` builds against **100% unmodified** upstream [`gamebub/framework`](https://github.com/gamebub/framework) (`f2b000c`). See [`docs/FRAMEWORK_PROPOSALS.md`](docs/FRAMEWORK_PROPOSALS.md) for:
 1. Notes on `(* IOB = "TRUE" *)` scalar-to-vector `OLOGICE2.TFF` auto-replication across `HandheldTop` (`SdramV0`/`SramV0`).
