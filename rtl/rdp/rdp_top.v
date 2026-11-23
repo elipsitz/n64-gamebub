@@ -4,15 +4,6 @@
 `define RDP_SHARE
 `endif
 `endif
-// the console's RDRAM, not the RDP, sets the pace of a pixel that reads or writes the depth or colour image: RDP_PXGAP clocks (default 4)
-// of nothing after each such pixel; RDP_NOPXGAP: none
-`ifndef RDP_NOPXGAP
-`ifndef RDP_NOSHARE
-`ifndef RDP_PXGAP
-`define RDP_PXGAP 4
-`endif
-`endif
-`endif
 // RDP -- Mirlo's rasterizer for the N64's own command stream, as a game's
 // microcode on the RSP (rtl/rsp) gives it. The contract is the C model,
 // lang/c/rdp/rdp.c built with RDP_N64: for the same command stream the RTL
@@ -289,10 +280,12 @@ module rdp_top (
     // a triangle's S and T are the N64's -- s10.5 in the integer half, against
     // a W of s.15 -- and go to the pipeline as they are: its perspective divide, and the
     // affine path, take the integer halves (lang/c/rdp/rdp.c draw_pixel_cvg)
-    // The LOD (docs/lod.md): a 2-cycle primitive with TEX_LOD. Without it LOD_FRACTION reads 0 (docs/rdp_exact.md,
-    // rule 9), however the combiner uses it. (Registered: the modes are set many clocks before a primitive's first pixel.)
+    // The LOD (docs/lod.md): a 2-cycle primitive with TEX_LOD, or whose combiner reads LOD_FRACTION (C 13 in a colour, C
+    // 0 in an alpha, either cycle). Without TEX_LOD, SHARPEN and DETAIL a magnified pixel's fraction reads 0 while the
+    // next tile was never set (rdp_pix's l3_lf, docs/rdp_exact.md rule 9). (Registered: the modes are set many clocks before a primitive's first pixel.)
     reg         lod_on;
-    always @(posedge clk) lod_on <= cyc == 2'd1 && other_h[16];
+    always @(posedge clk) lod_on <= cyc == 2'd1 && (other_h[16] || cc_hi[19:15] == 5'd13 || cc_hi[4:0] == 5'd13
+                                                         || cc_hi[11:9] == 3'd0 || cc_lo[20:18] == 3'd0);
     reg         lod_lft;            // the walk goes to the right (a triangle's lft; a rectangle's always): x + 1 is next
     reg  [2:0]  lod_lvl;            // the level count (the triangle's level field; a rectangle's 0)
     reg  [4:0]  min_lvl;            // SET_PRIM_COLOR's minimum level
@@ -371,6 +364,8 @@ module rdp_top (
     // which tiles are YUV 16-bit ones (a pass that converts checks its tile's, or with CONVERT_ONE the one before)
     reg [7:0]  yuv_vec;
     initial yuv_vec = 8'd0;
+    reg [7:0]  tset;                // by tile: SET_TILE has set it since the reset (rdp_pix's l3_lf: rdp_exact.md rule 9)
+    initial tset = 8'd0;
     wire two_pass;
     wire        px_valid, px_cpass, px_zpass, pix_busy, px_set;
     reg         set_cur;            // the line-buffer set of the row being drawn
@@ -392,7 +387,7 @@ module rdp_top (
         .t_cs(ts_cs), .t_ms(ts_ms), .t_ct(ts_ct), .t_mt(ts_mt),
         .t_masks(ts_masks), .t_shifts(ts_shifts), .t_maskt(ts_maskt), .t_shiftt(ts_shiftt),
         .t_uls(ts_uls), .t_ult(ts_ult), .t_lrs(ts_lrs), .t_lrt(ts_lrt),
-        .tl_ra(tl_ra), .p_tile(p_tile), .yuv_vec(yuv_vec), .two_pass(two_pass),
+        .tl_ra(tl_ra), .p_tile(p_tile), .yuv_vec(yuv_vec), .tset(tset), .two_pass(two_pass),
         .lod_on(lod_on), .lod_lft(lod_lft), .lod_lvl(lod_lvl), .min_lvl(min_lvl), .in_ghost(pix_ghost),
         .in_valid(pix_valid), .in_x(pix_x), .in_par(par_c), .in_set(set_cur), .row_y(sc_field ? cy[2:1] : cy[1:0]),
         .in_r(cur[0]), .in_g(cur[1]), .in_b(cur[2]), .in_a(cur[3]),
@@ -485,13 +480,31 @@ module rdp_top (
     // memory is in the old buffers
     wire [9:0] pix_wi = ({9'd0, xsp[0]} + px_cnt) >> 1;
     // (a 32-bit image's colour span: a word a pixel)
-`ifdef RDP_PXGAP
-    // (RDP_PXGAP clocks of nothing after each pixel that reads or writes the depth or colour image: the RDRAM's pace)
-    reg  [3:0] pxg;
-    wire       pxg_ok = pxg == 4'd0;
-`else
-    wire       pxg_ok = 1'b1;
-`endif
+    // The console's pace of a pixel (sim/rdp/rdp_time.c has the rules and where each comes from): the RDRAM, not the pipeline, sets the
+    // time of a pixel that moves memory. A pixel is worth `pk` eighths of a clock -- 7 for each transfer of its 16-byte group (the colour
+    // read with IM_RD, the depth read with Z_CMP, the colour and depth written where the last result passed: its prediction), 4 more where
+    // depth and colour share a 1 MiB bank, 3 more when it reads -- and the clocks it has over its issue slot (a clock, two in 2-cycle mode)
+    // are spent as nothing after it. (The console's 12 clocks of a row that moves memory, 4 of one that does not, are not added: the walker's
+    // own row setup and the write-back's latency are as long; 8 more clocks a row moved the 54 hardware timings' mean by 0.2 %.) A SYNC LOAD,
+    // PIPE and TILE, and a SYNC FULL, spend their 25, 50, 33 and 50 before the next command starts. What the console takes beyond this
+    // (a fill's and a load's memory, a triangle's own setup) is not paced: the RDP here is the slower of the two in a fill and a load, and
+    // its triangles are not faster than the model's by much (docs/rdp.md, Speed).
+    reg  [5:0] pxg;
+    reg  [3:0] pfr;                         // the eighths carried (in 2-cycle mode, a pixel's slot is two clocks: the sixteenths of a slot)
+    reg        lc_w, lz_w;                  // the last result's colour and depth passes
+    reg        pg_ld;                       // (the FSM's request: pxg := pg_v)
+    reg  [5:0] pg_v;
+    wire       pxg_ok = pxg == 6'd0 && !pg_ld;
+    wire       pk_ic = other_l[6] && !cyc[1] && !cimg8;
+    wire [2:0] pk_tr = {2'b00, pk_ic} + {2'b00, z_cmp} + {2'b00, lc_w} + {2'b00, lz_w && z_upd};
+    wire       pk_b = cimg[23:20] == zimg[23:20] && (z_cmp || (lz_w && z_upd)) && (pk_ic || lc_w);
+    wire [5:0] pk = {pk_tr, 3'b000} - {3'b000, pk_tr} + (pk_b ? 6'd4 : 6'd0) + ((pk_ic || z_cmp) ? 6'd3 : 6'd0);
+    wire [5:0] pk_iv = (cyc == 2'd1) ? 6'd16 : 6'd8;
+    wire [5:0] pk_mx = (pk > pk_iv) ? pk - pk_iv : 6'd0;
+    wire [5:0] pk_ex = (z_cmp && pk_mx < 6'd3) ? 6'd3 : pk_mx;           // (a depth compare costs the pipeline 3 more a group)
+    wire       pk_c2 = cyc == 2'd1;
+    wire [5:0] pk_acc = {2'b00, pk_c2 ? pfr : {1'b0, pfr[2:0]}} + pk_ex;
+    wire [5:0] pk_gap = pk_c2 ? {3'b000, pk_acc[5:4], 1'b0} : {3'b000, pk_acc[5:3]};      // (a 2-cycle pixel waits whole slots)
     // (the gap is in pix_ok, not pix_slot: with the LOD a pixel not ready in time is a ghost, which keeps the neighbour's perspective divide on time)
     wire       pix_ok = pxg_ok && !rq_cur && h_done && (!z_cmp || z_have > pix_wi) && (!need_mem || c_have > (cimg32 ? px_cnt : pix_wi));
     // a pixel that goes through the texture stages twice (rdp_pix two_pass), or takes the LOD, is issued every second
@@ -515,12 +528,15 @@ module rdp_top (
     wire       pix_end = pix_pos == xe;
     wire       pix_gh = lod_on && pix_slot && (pix_g0 || (pix_fol && (pix_end || !pix_ok)));
     wire       pix_go = pix_ok && pix_slot && !pix_gh && !(lod_on && pix_end);
-`ifdef RDP_PXGAP
-    always @(posedge clk)
-        if (st == S_PIX && row_wq && pix_go && (z_cmp || z_upd || need_mem)) pxg <= `RDP_PXGAP;
-        else if (pxg != 4'd0) pxg <= pxg - 4'd1;
-    initial pxg = 4'd0;
-`endif
+    always @(posedge clk) begin
+        if (px_valid) begin lc_w <= px_cpass; lz_w <= px_zpass; end
+        if (pg_ld) pxg <= pg_v;
+        else if (st == S_PIX && row_wq && pix_go && pk != 6'd0) begin
+            pxg <= pk_gap;
+            pfr <= pk_c2 ? pk_acc[3:0] : {1'b0, pk_acc[2:0]};
+        end else if (pxg != 6'd0) pxg <= pxg - 6'd1;
+    end
+    initial begin pxg = 6'd0; pfr = 4'd0; lc_w = 1'b0; lz_w = 1'b0; end
     // nothing of the primitive is under way any more
     wire       all_quiet = !pix_busy && !pix_valid && !px_valid && !msk_we
                          && !rq_pend && !rd_busy && !wq_pend && !wr_busy;
@@ -911,6 +927,7 @@ module rdp_top (
     always @(posedge clk) begin
         zn_we <= 1'b0; cn_we <= 1'b0; msk_we <= 1'b0;
         pix_valid <= 1'b0;
+        pg_ld <= 1'b0;
         sync_ev <= 1'b0;
         if (rst) begin
             st <= S_IDLE;
@@ -926,7 +943,7 @@ module rdp_top (
             fill <= 0; fog <= 0; blend <= 0; prim <= 0; env <= 0; prim_lod_frac <= 0; k4 <= 0; k5 <= 0; cv_k03 <= 0; prim_z <= 0; prim_dz <= 0;
             sc_xh <= 0; sc_yh <= 0; sc_xl <= 12'd4092; sc_yl <= 12'd4092; sc_field <= 1'b0; sc_odd <= 1'b0;
             cimg <= 0; zimg <= 0; timg <= 0; cimg_width <= 11'd1; timg_width <= 11'd1;
-            timg_size <= 2'd0; cimg_ok <= 1'b0; cimg8 <= 1'b0; cimg32 <= 1'b0;
+            timg_size <= 2'd0; cimg_ok <= 1'b0; cimg8 <= 1'b0; cimg32 <= 1'b0; tset <= 8'd0;
         end else begin
             // ---- the engines take their requests
             if (rq_pend && rd_ready && old_hold[rq_set] == 5'd0 && hz_ok) begin
@@ -981,7 +998,7 @@ module rdp_top (
 
             // ---- execute
             case (st)
-            S_IDLE: if (exec_go && (all_quiet || tri_early)) begin
+            S_IDLE: if (exec_go && (all_quiet || tri_early) && pxg_ok) begin
                 exec_go <= 1'b0;
                 busy_exec <= 1'b1;
                 w0 <= nw0; w1 <= nw1;
@@ -1011,8 +1028,9 @@ module rdp_top (
                     st <= S_TLOAD; tl_tri <= 1'b1;
                 end else begin
                     case (nop)
-                    6'h00, 6'h26, 6'h27, 6'h28: begin busy_exec <= 1'b0; end
-                    6'h29: st <= S_SYNC;
+                    6'h00: busy_exec <= 1'b0;
+                    6'h26, 6'h27, 6'h28: begin busy_exec <= 1'b0; pg_ld <= 1'b1; pg_v <= nop[1:0] == 2'd2 ? 6'd25 : nop[1:0] == 2'd3 ? 6'd50 : 6'd33; end
+                    6'h29: begin st <= S_SYNC; pg_ld <= 1'b1; pg_v <= 6'd50; end
                     6'h24, 6'h25, 6'h36: begin
                         // rectangles: texrect (nw0: XL YL, nw1: tile XH YH, then S T, DsDx DtDy in t_xl, t_dxl)
                         kind_tri <= 1'b0;
@@ -1076,6 +1094,7 @@ module rdp_top (
                     end
                     6'h35: begin
                         yuv_vec[nw1[26:24]] <= nw0[23:21] == 3'd1 && nw0[20:19] == 2'd2;
+                        tset[nw1[26:24]] <= 1'b1;
                         tl_attr[nw1[26:24]] <= {nw0[23:21], nw0[20:19], nw1[23:20], nw0[17:9], nw0[8:0],
                                                nw1[9], nw1[8], nw1[19], nw1[18],
                                                nw1[7:4], nw1[3:0], nw1[17:14], nw1[13:10]};
@@ -1368,9 +1387,9 @@ module rdp_top (
                         l_dst <= {ts_tmem, 2'b00};
                         l_odd <= 1'b0;
                         if (l_kind == 2'd0) begin
-                            nt = {1'b0, w1[23:12]} - {1'b0, w0[23:12]} + 13'd1;
+                            nt = {1'b0, w1[23:12] - w0[23:12] + 12'd1};      // (the count is 12 bits: 4,096 texels are 0, and load nothing)
                             l_n <= load_words(nt, timg_size);
-                            l_none <= w1[23:12] < w0[23:12];
+                            l_none <= w1[23:12] < w0[23:12] || nt == 13'd0;
                             tt <= 10'd0; tt1 <= 10'd0;
                         end else begin
                             nt = {3'd0, s1} - {3'd0, s0} + 13'd1;
@@ -1407,7 +1426,7 @@ module rdp_top (
             end
 
             // ---- SYNC FULL: every earlier write accepted by the memory
-            S_SYNC: if (all_quiet && !mem_wpend) begin
+            S_SYNC: if (all_quiet && !mem_wpend && pxg_ok) begin
                 sync_count <= sync_count + 32'd1;
                 sync_ev <= 1'b1;
                 st <= S_IDLE;

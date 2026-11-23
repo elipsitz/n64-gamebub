@@ -17,6 +17,13 @@
 //               RTL == model on every plane, and the shadow words the RDP wrote must pass their check where nothing else wrote and fail where it did
 //   TB_STEP=1   compare after every command, stop at the first that differs
 //   TB_C32=1    random streams into a 32-bit colour image (docs/cimg32.md)
+//   TB_WORDS=1  the files are RDP command words (big-endian, as TB_DUMP writes them), drawn on a zeroed memory
+//   TB_SYNCT=1  the cycle each SYNC FULL completes, and the cycles since the one before (TB_SYNCGAP=1: a list's
+//               commands wait for the RDP to be idle after the SYNC FULL before them, as for a program that waits for
+//               the DP interrupt; the cycles from the list's first word taken, then)
+//   TB_TRACE=<first cycle>,<count>  the sequencer's and the engines' state, a line a cycle
+//   TB_CFLAGS=-DRDP_CTIME (build): each command's time on the console, estimated, by class next to the RTL's
+//               (TB_CTIME_CSV=<file>: per command)
 //   The noise LFSR (rdp_pix.v): the lockstep comparison needs it to step once for each pixel with coverage, as the model's does (RDP_LFSR_PIXEL,
 //   which build_rtl.sh sets); the RTL's default is a free-running one (VDEFS= builds it), which is checked by
 //   TB_FREE=1   every clock of the RDP's: the LFSR steps (23 bits, the console's taps), counted and reported per stream
@@ -45,13 +52,31 @@ static const uint32_t SIZE = 8u << 20;                     // the RDRAM (the RSP
 static const uint32_t MSIZE = 32u << 20;                   // the RTL's and the model's: and the hidden plane at 8 MiB, the shadow plane at 16 MiB (rdp.h)
 static uint8_t *rsp_mem, *rtl_mem, *mdl_mem;
 static uint16_t mdl_rd(void *, uint32_t a) { a &= MSIZE - 2; return (uint16_t)(mdl_mem[a] << 8 | mdl_mem[a + 1]); }
-static void mdl_wr(void *, uint32_t a, uint16_t v) { a &= MSIZE - 2; mdl_mem[a] = (uint8_t)(v >> 8); mdl_mem[a + 1] = (uint8_t)v; }
+#ifdef RDP_CTIME
+#include "rdp_time.h"
+static rdp_time_t ctt;                                      // the console's time model (rdp_time.c)
+#endif
+static void mdl_wr(void *, uint32_t a, uint16_t v)
+{
+    a &= MSIZE - 2; mdl_mem[a] = (uint8_t)(v >> 8); mdl_mem[a + 1] = (uint8_t)v;
+#ifdef RDP_CTIME
+    if (a < (8u << 20)) rdp_time_write(&ctt, a);
+#endif
+}
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
 static void wbe32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v; }
 
 static Vrdp_top *top;
 static uint64_t cycles;
 static std::deque<uint32_t> cmdq;                           // words for the RTL
+#ifdef RDP_CTIME
+// TB_CFLAGS=-DRDP_CTIME: the console's time of each command (rdp_time.c: its rules, their sources and how far each is to be trusted),
+// next to the RTL's: from the cycle the command started to execute to the next one's.
+static std::deque<int> cmdq_op;                             // the opcode at a command's first word, else -1
+static std::vector<std::pair<uint64_t, int>> rtl_starts;    // the cycle each command's first word was taken, its opcode
+static std::vector<std::pair<uint64_t, uint64_t>> ct_est;   // per command: console estimate (pipeline only, and with memory)
+static void ct_span(const rdp_t *, int y, int x0, int x1) { rdp_time_span(&ctt, y, x0, x1); }
+#endif
 struct Rd { uint64_t due; uint32_t addr; };
 static std::deque<Rd> reads;
 static std::deque<uint32_t> wr_addrs;                        // accepted write commands
@@ -169,6 +194,7 @@ static uint64_t pix_why2[2][8], st_cyc[32], pix_why[8], st_rd[32], st_wr[32];   
 static std::vector<uint64_t> take_cyc, start_cyc;                // TB_CLS: the cycle each command word was taken, and each command started executing                      // TB_CLS: the cycle each command word was taken
 
 
+static uint64_t list_start; static bool list_idle = true;   // (TB_SYNCGAP: the cycle a list's first word is taken)
 static void tick()
 {
     top->cmd_valid = !cmdq.empty();
@@ -222,8 +248,28 @@ static void tick()
             }
         }
     }
+    if (getenv("TB_TRACE")) {     // TB_TRACE=<first cycle>,<count>: the sequencer's and the engines' state a cycle
+        static long t0 = -1, tn = 0; if (t0 < 0) { sscanf(getenv("TB_TRACE"), "%ld,%ld", &t0, &tn); }
+        if ((long)cycles >= t0 && (long)cycles < t0 + tn) {
+            auto *r = top->rootp;
+            printf("T %llu st %d wk %d rq_pend %d r_act %d w_act %d row_wq %d wq_pend %d z_have %d c_have %d px_cnt %d pix_ok %d cmd %d%d%d\n", (unsigned long long)cycles,
+                   r->rdp_top__DOT__st & 31, r->rdp_top__DOT__wk, r->rdp_top__DOT__rq_pend, r->rdp_top__DOT__mem__DOT__r_act, r->rdp_top__DOT__mem__DOT__w_act,
+                   r->rdp_top__DOT__row_wq, r->rdp_top__DOT__wq_pend, r->rdp_top__DOT__z_have, r->rdp_top__DOT__c_have, r->rdp_top__DOT__px_cnt,
+                   (int)r->rdp_top__DOT__pix_valid, top->m_cmd_valid, top->m_cmd_ready, top->m_cmd_we);
+        }
+    }
     top->clk = 1; top->eval();
     cycles++;
+    if (cmd_take && list_idle) { list_start = cycles - 1; list_idle = false; }
+    if (top->sync_ev) list_idle = true;
+    if (top->sync_ev) {
+        static const bool synct = getenv("TB_SYNCT") != nullptr;
+        static const bool sgap = getenv("TB_SYNCGAP") != nullptr;
+        static uint64_t last_sync;
+        if (sgap) last_sync = list_start;
+        if (synct) printf("SYNC at %llu: %llu cycles since the last\n", (unsigned long long)cycles, (unsigned long long)(cycles - last_sync));
+        last_sync = cycles;
+    }
     { static bool prev_go; bool go = top->rootp->rdp_top__DOT__exec_go; if (prev_go && !go) start_cyc.push_back(cycles); prev_go = go; }
     if (free_chk) {          // TB_FREE=1: the LFSR stepped on every clock
         const uint32_t cur = top->rootp->rdp_top__DOT__pix__DOT__lfsr;
@@ -234,6 +280,10 @@ static void tick()
         }
     }
     if (cmd_take) {
+#ifdef RDP_CTIME
+        if (cmdq_op.front() >= 0) rtl_starts.push_back({ cycles, cmdq_op.front() });
+        cmdq_op.pop_front();
+#endif
         // TB_CMDT=<file>: the cycle each command word is taken (rdp_flow.py)
         static FILE *ct = getenv("TB_CMDT") ? fopen(getenv("TB_CMDT"), "w") : nullptr;
         if (ct) fprintf(ct, "%llu\n", (unsigned long long)cycles);
@@ -589,6 +639,15 @@ int main(int argc, char **argv)
             rand_stream(seed, ai + 2 < argc ? atoi(argv[ai + 2]) : 400);
             snprintf(rname, sizeof rname, "random %u", seed);
             argv[ai] = rname;
+        } else if (getenv("TB_WORDS")) {
+            // TB_WORDS=1: the file is RDP command words, big-endian (as TB_DUMP writes them), drawn on a zeroed memory
+            FILE *f = fopen(argv[ai], "rb");
+            if (!f) { fprintf(stderr, "%s: cannot open\n", argv[ai]); return 2; }
+            memset(rsp_mem, 0, SIZE);
+            cmds.clear();
+            uint8_t b4[4];
+            while (fread(b4, 1, 4, f) == 4) cmds.push_back(be32(b4));
+            fclose(f);
         } else {
         FILE *f = fopen(argv[ai], "rb");
         uint8_t hdr[16];
@@ -639,11 +698,23 @@ int main(int argc, char **argv)
         if (const char *dp = getenv("TB_DUMP")) {          // TB_DUMP=file: the command words, big-endian (to replay on the model alone)
             if (FILE *df = fopen(dp, "wb")) { for (uint32_t x : cmds) { uint8_t b4[4]; wbe32(b4, x); fwrite(b4, 1, 4, df); } fclose(df); }
         }
+#ifdef RDP_CTIME
+        rdp_span_hook = ct_span; if (!ctt.wseg) rdp_time_init(&ctt);
+        rtl_starts.clear(); ct_est.clear(); cmdq_op.clear();
+#endif
         for (uint32_t x : cmds) {
-            cmdq.push_back(x); rdp_push(&mdl, x);
+            cmdq.push_back(x);
+#ifdef RDP_CTIME
+            cmdq_op.push_back(cur.empty() ? (int)((x >> 24) & 63) : -1);
+            if (cur.empty()) rdp_time_begin(&ctt);
+#endif
+            rdp_push(&mdl, x);
             cur.push_back(x);
             if (mdl.ncmd != 0) continue;                    // command not complete yet
             ncmd++;
+#ifdef RDP_CTIME
+            ct_est.push_back({ rdp_time_cmd(&ctt, &mdl, cur.data(), (unsigned)cur.size(), 0), rdp_time_cmd(&ctt, &mdl, cur.data(), (unsigned)cur.size(), 1) });
+#endif
             crec.push_back({ (cur[0] >> 24) & 63, (uint32_t)cur.size(), mdl.other_h, mdl.other_l, cur[0], cur.size() > 1 ? cur[1] : 0, mdl.pixels_drawn, cwords });
             cwords += cur.size();
             if (((cur[0] >> 24) & 63) == RDP_OP_SET_CIMG) reg_ci = mdl.cimg; if (((cur[0] >> 24) & 63) == 0x3E) reg_zi = mdl.zimg; if (((cur[0] >> 24) & 63) == 0x3D) reg_ti = mdl.timg;
@@ -803,6 +874,32 @@ int main(int argc, char **argv)
             for (int k = 0; k < 2; k++) for (int c = 0; c < 6; c++) if (pix_why2[k][c]) printf("        S_PIX %s: %-48s %9llu\n", k ? "words" : "request", cn[c], (unsigned long long)pix_why2[k][c]);
             memset(pix_why2, 0, sizeof pix_why2);
         }
+#ifdef RDP_CTIME
+        {
+            // by class: 0 triangles, 1 texture rectangles, 2 fill rectangles, 3 loads, 4 syncs, 5 the rest
+            static const char *cn[6] = { "triangles", "texture rectangles", "fill rectangles", "loads", "syncs", "other" };
+            uint64_t rt[6] = {}, cp[6] = {}, cm[6] = {}, nn[6] = {};
+            size_t nc = start_cyc.size() < ct_est.size() ? start_cyc.size() : ct_est.size();
+            FILE *pc = getenv("TB_CTIME_CSV") ? fopen(getenv("TB_CTIME_CSV"), "w") : nullptr;
+            for (size_t i = 0; i < nc; i++) {
+                int op = (int)crec[i].op;      // (a command's time: from the cycle it started to execute to the next one's)
+                uint64_t d = (i + 1 < start_cyc.size() ? start_cyc[i + 1] : cycles - 64) - start_cyc[i];
+                int c = (op >= 8 && op <= 15) ? 0 : (op == 0x24 || op == 0x25) ? 1 : op == 0x36 ? 2
+                      : (op == 0x30 || op == 0x33 || op == 0x34) ? 3 : (op >= 0x26 && op <= 0x29) ? 4 : 5;
+                rt[c] += d; cp[c] += ct_est[i].first; cm[c] += ct_est[i].second; nn[c]++;
+                if (pc) fprintf(pc, "%zu,%02x,%llu,%llu,%llu\n", i, op, (unsigned long long)d, (unsigned long long)ct_est[i].first, (unsigned long long)ct_est[i].second);
+            }
+            if (pc) fclose(pc);
+            uint64_t T[3] = {};
+            printf("\n    %-20s %7s %10s %12s %12s\n", "console estimate", "count", "RTL", "pipeline", "with memory");
+            for (int c = 0; c < 6; c++) {
+                if (!nn[c]) continue;
+                printf("    %-20s %7llu %10llu %12llu %12llu\n", cn[c], (unsigned long long)nn[c], (unsigned long long)rt[c], (unsigned long long)cp[c], (unsigned long long)cm[c]);
+                T[0] += rt[c]; T[1] += cp[c]; T[2] += cm[c];
+            }
+            printf("    %-20s %7s %10llu %12llu %12llu\n", "total", "", (unsigned long long)T[0], (unsigned long long)T[1], (unsigned long long)T[2]);
+        }
+#endif
         if (getenv("TB_KINDS")) {
             printf("  textured primitives' kinds (cycle type, TLUT bits, format, size):");
             for (unsigned v : kinds) printf(" %04x", v);

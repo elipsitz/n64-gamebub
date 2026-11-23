@@ -251,6 +251,7 @@ typedef struct {
     uint32_t zimg;
     uint32_t timg, timg_width;             /* width in texels */
     rdp_tile_t tile[8];
+    uint8_t tile_set;                      /* RDP_N64: the tiles SET_TILE has set since the reset (a bit a tile): rdp_exact.md rule 9 */
     uint16_t tmem[4][1024];
     uint16_t tmem16[2048];                 /* RDP_N64: TMEM as the N64's, in 16-bit words (see rdp.c) */
     uint8_t cimg_size;                     /* RDP_N64: the colour image's (2: 16-bit, 1: 8-bit -- rdp.c wr8; 3: 32-bit, RDP_CVG) */
@@ -304,6 +305,12 @@ typedef struct {
 } rdp_lod_t;
 rdp_lod_t rdp_lod(uint32_t other_h, unsigned min_level, unsigned max_level, unsigned prim_tile,
                     const int32_t s[3], const int32_t t[3], int oob);
+#endif
+
+#ifdef RDP_CTIME
+/* (sim/rdp/tb_rdp's console timing estimate) each span a primitive draws: its row and its first and last pixel,
+ * before any pixel of it is drawn */
+extern void (*rdp_span_hook)(const rdp_t *r, int y, int x0, int x1);
 #endif
 
 #endif

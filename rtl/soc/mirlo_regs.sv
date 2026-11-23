@@ -170,7 +170,7 @@ module mirlo_regs #(
     output logic [15:0] gbc_addr,
     output logic [7:0]  gbc_wdata,
     input  wire         gbc_busy,
-    input  wire         gbc_present = 1'b1,
+    input  wire         gbc_present,
     input  wire  [7:0]  gbc_rdata
 );
 `include "mirlo_regs.svh"

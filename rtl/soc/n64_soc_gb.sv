@@ -409,6 +409,12 @@ module n64_soc_gb #(
     wire x_psh  = x_addr[31:21] == 11'h1A0;
     wire io_ps  = x_psh || x_d2;
 
+    // PI write latch (MIRLO64 v1.0 #214): a CPU write to the cartridge bus is
+    // asynchronous (112 RCP clocks); while busy, reads return the latched word.
+    wire         x_rom_pi = x_rom && !x_psw && !x_psh;
+    logic [31:0] pi_word, pi_q;
+    logic [6:0]  pi_busy;
+
     logic        d2_flash, io_ack;
     logic [31:0] pa_dat_r /*verilator public_flat_rd*/;
     wire  [23:0] io_adr = x_psh              ? {5'd0, x_addr[20:2]}
@@ -418,7 +424,7 @@ module n64_soc_gb #(
 
     typedef enum logic [3:0] {
         X_IDLE, X_REGS, X_REGD, X_RSP, X_MON, X_MOND,
-        X_MIW1, X_MIW2, X_VIR, X_VIW, X_PIF, X_PIFR, X_CART
+        X_MIW1, X_MIW2, X_VIR, X_VIW, X_PIF, X_PIFR, X_CART, X_PIR
     } xst_t;
     xst_t        xs;
     logic [31:0] mon_rd, mi_w_rd, vi_rd, ai_rd, si_rd, si_q, r_rdata, rsp_x_rdata, rx_wdata;
@@ -457,6 +463,7 @@ module n64_soc_gb #(
                 else if (x_pif)  xs <= X_PIF;
                 else if (x_d2 || x_rom || x_psw || x_psh) begin
                     if (x_we && (x_rom || x_psw || (x_d2 && d2_flash))) x_ack <= 1'b1;
+                    else if (!x_we && x_rom_pi && pi_busy != 7'd0) xs <= X_PIR;
                     else xs <= X_CART;
                 end else if (x_rsp || x_spr || x_sppc || x_dpcr) begin
                     rx_wdata <= x_wdata;
@@ -476,6 +483,7 @@ module n64_soc_gb #(
             X_PIF:  if (!si_busy) xs <= x_we ? X_MIW2 : X_PIFR;
             X_PIFR: begin x_ack <= 1'b1; xs <= X_IDLE; end
             X_CART: if (io_ack) begin x_ack <= 1'b1; xs <= X_IDLE; end
+            X_PIR:  begin x_ack <= 1'b1; xs <= X_IDLE; end
             X_VIW:  xs <= X_MIW1;
             X_MIW1: xs <= X_MIW2;
             X_MIW2: begin x_ack <= 1'b1; xs <= X_IDLE; end
@@ -485,12 +493,23 @@ module n64_soc_gb #(
     end
 
     always_ff @(posedge clk) begin
+        if (pi_busy != 7'd0) pi_busy <= pi_busy - 7'd1;
+        if (xs == X_IDLE && x_req && !x_ack && x_rom_pi && x_we && pi_busy == 7'd0) begin
+            pi_word <= x_wdata;
+            pi_busy <= 7'd111;
+        end
+        pi_q <= pi_word;
+        if (rst) pi_busy <= 7'd0;
+    end
+
+    always_ff @(posedge clk) begin
         case (xs)
             X_IDLE:  x_rdata <= (x_mi || x_pi) ? mi_w_rd : x_ai ? ai_rd : x_si ? si_rd : 32'd0;
             X_MOND:  x_rdata <= mon_rd;
             X_VIR:   x_rdata <= vi_rd;
             X_PIFR:  x_rdata <= si_q;
             X_CART:  x_rdata <= pa_dat_r;
+            X_PIR:   x_rdata <= pi_q;
             X_RSP:   x_rdata <= rsp_x_rdata;
             default: x_rdata <= r_rdata;
         endcase

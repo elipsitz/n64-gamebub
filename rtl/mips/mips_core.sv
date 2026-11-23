@@ -133,6 +133,12 @@
 //    Nothing the caches' tags say reaches the pipeline's advance.
 `default_nettype none
 
+// (SAFE_STATE_MACHINE off for the state machines of this module: every one starts from its first state -- or is loaded before it is read --
+// and has no way into a state its code does not name; the recovery logic that the project's setting adds to each is area for nothing)
+// (and the multiplexers restructured, the whole CPU's: the project holds MUX_RESTRUCTURE off at mips_sys, for the CPU's clock -- the paths of the
+// pipeline's advance, the fetch's address and the forwarding did not close with it -- and an attribute of the module is the more specific assignment.
+// One attribute string: only the last of several is taken)
+(* altera_attribute = "-name SAFE_STATE_MACHINE OFF; -name MUX_RESTRUCTURE ON" *)
 module mips_core #(
     parameter int TLB_N = 32,               // the VR4300's; in a RAM, so the count costs no logic
     // 0: no TLB -- as if it never held a valid entry: a mapped access takes
@@ -213,6 +219,10 @@ module mips_core #(
     // FPD64 (with FAST): add.d, sub.d, mul.d, abs.d, neg.d and the compares of doubles exact, at 53 bits, in fpu_d64 (a few cycles each, on
     // an adder, a shifter and a DSP block); div.d, sqrt.d and the conversions stay on the FPU's single-precision datapath. COP0 register 7's bit 26.
     parameter bit FPD64 = 0,
+    // FR1: the FPU's 32 registers of 64 bits with Status.FR set (the VR4300's FR=1: a double in any register); Status.FR clear, the 16
+    // even / odd pairs (the odd register the upper word of the even one). A game that sets the bit in its threads' status compiles its
+    // doubles into the odd registers too
+    parameter bit FR1 = 0,
     // for a clock half as fast again (docs/mips.md): what the caches hold is
     // used before its tag is looked at, and a branch's compare no longer
     // reaches the next fetch
@@ -286,9 +296,9 @@ module mips_core #(
     output logic        tr_exc_int,
     output logic [31:0] tr_exc_pc,
     output logic [4:0]  tr_exc_code,
-    output logic        tr_fwe_even, tr_fwe_odd,    // the FPU registers it wrote (pair tr_fwidx)
-    output logic [3:0]  tr_fwidx,
-    output logic [31:0] tr_fweven, tr_fwodd,
+    output logic        tr_fwe_lo, tr_fwe_hi,       // the FPU register it wrote: its lower and upper words (FR clear: the even register's)
+    output logic [4:0]  tr_fwidx,
+    output logic [31:0] tr_fwlo, tr_fwhi,
     output logic [31:0] tr_fcr31,
     // debug (Mirlo-N64's on-screen display)
     output logic [31:0] dbg_pc, dbg_cause, dbg_status, dbg_epc,
@@ -584,8 +594,10 @@ wire         game_view = MAP_HI && mon_klo && mon_game && !c0_status[2] && !c0_s
 function automatic logic [31:0] hx32(input logic [63:0] v); return v[63:32] ^ {32{v[31]}}; endfunction
 function automatic logic [63:0] v64(input logic [31:0] hx, input logic [31:0] lo); return {hx ^ {32{lo[31]}}, lo}; endfunction
 
-logic [31:0] c0_index, c0_entrylo0, c0_entrylo1, c0_context, c0_pagemask, c0_wired, c0_badvaddr,
-             c0_count, c0_entryhi, c0_compare, c0_cause, c0_epc, c0_config, c0_errorepc;
+logic [31:0] c0_index, c0_wired, c0_cause, c0_config;
+// (the others -- Count, Compare, EntryHi, EntryLo0/1, Context, PageMask, EPC, ErrorEPC, BadVAddr, and the monitor level's mon_badv -- are the
+// registers of mips_c0r, below the core: they are written from here by the enables that the sequential block ends with)
+wire  [31:0] c0_entrylo0, c0_entrylo1, c0_context, c0_pagemask, c0_badvaddr, c0_count, c0_entryhi, c0_compare, c0_epc, c0_errorepc;
 // (no LLAddr, WatchLo, WatchHi, TagLo: they only store what mtc0 gives them -- LL's address, the watch of an access that no exception follows
 // here, a cache tag -- and no game reads them back; mfc0 finds 0 there and mtc0 does nothing)
 logic        count_frac;
@@ -655,6 +667,12 @@ endfunction
 function automatic logic [34:0] utlb_res(input tlbx_t x, input logic [31:0] va);
     return {1'b1, x.v, x.d, {x.pfn, 12'd0} | {7'd0, va[24:0] & {x.om, 12'hFFF}}};
 endfunction
+// {bad, hi, bit 22} of a translation (m_tq_*), for an access that stores (st) or loads
+function automatic logic [2:0] tq_flags(input logic [34:0] q, input logic st);
+    logic ok;
+    ok = q[34] && q[33] && !(st && !q[32]);
+    return {!ok, ok && q[31:23] != 9'd0, ok && q[22]};
+endfunction
 
 typedef enum logic [1:0] { SC_IDLE, SC_RUN, SC_DONE } sc_t;
 typedef enum logic [1:0] { SCM_LOOKUP, SCM_PROBE, SCM_READ } scm_t;
@@ -681,7 +699,7 @@ typedef struct packed {
     logic [16:0] pfn;                        // pa[28:12]
 } tre_t;
 logic        tr_lastf;                       // the last TLB exception was a fetch's
-logic [31:0] mon_badv;                       // (MON) the address of the last translation fault taken by the monitor level: COP0 22
+wire  [31:0] mon_badv;                       // (MON) the address of the last translation fault taken by the monitor level: COP0 22
 logic [8:0]  tr_raddr, tr_waddr;
 logic        tr_we_d, tr_we_i;
 tre_t        tr_wdata, tr_qd, tr_qi;
@@ -864,8 +882,10 @@ wire [31:0] br_a = m_rs ? m_res : rf_a, br_b = m_rt ? m_res : rf_b;
 function automatic logic wideprod(input ctl_t c);
     return (XALU && c.x64 != X_NONE && c.x64 != X_SLT && c.x64 != X_SLTU) || c.ld == M_LD || c.ld == M_LWU || c.ld == M_LDL || c.ld == M_LDR || c.cop1_64;   // (a compare's result is 0 or 1)
 endfunction
-wire e_wp = e_live && e_c.wr && wideprod(e_c), m_wp = m_valid && m_c.wr && wideprod(m_c);
-wire w_wp = w_valid && w_c.wr && wideprod(w_c), x_wp = rf_xv && rf_xw;
+// (FAST: wideprod of M's and W's instruction, registered as it enters them -- a function of M's control bits is two levels in front of the hazard)
+logic m_k_wprod, w_k_wprod;
+wire e_wp = e_live && e_c.wr && wideprod(e_c), m_wp = m_valid && m_c.wr && (FAST ? m_k_wprod : wideprod(m_c));
+wire w_wp = w_valid && w_c.wr && (FAST ? w_k_wprod : wideprod(w_c)), x_wp = rf_xv && rf_xw;
 wire inflight_rs = (e_live && e_c.wr && e_c.rd == d_rs) || (m_valid && m_c.wr && m_c.rd == d_rs) || w_rs || x_rs;
 wire inflight_rt = (e_live && e_c.wr && e_c.rd == d_rt) || (m_valid && m_c.wr && m_c.rd == d_rt) || w_rt || x_rt;
 wire [31:0] rf_ah = (!W64 || d_rs == 0 || inflight_rs) ? 32'd0 : rfq_ah;
@@ -973,34 +993,46 @@ wire [31:0] d_ptarget = (JT && d_c.br == B_JR) ? {d_jt[29:0], 2'b00} : d_c.br ==
 // (FAST: which of them, known as the instruction leaves D -- M and W then
 // hold what E and M hold now -- and an immediate in e_rb, as an operand)
 logic e_fa_m, e_fa_w, e_fb_m, e_fb_w;
+// (FAST: the same selects one-hot -- M's result, W's where M's is not, else the register file's -- for the operand multiplexers of mips_ealu:
+// each bit is then one AND-OR of six inputs, not a chain of two multiplexers. Kept with e_f?_?: set as the instruction leaves D, and W's
+// dropped when E waits)
+logic e_sa_w, e_sa_r, e_sb_w, e_sb_r;
 wire e_m_a = FAST ? e_fa_m : m_wr && !m_c.late && m_c.rd == e_rs && e_rs != 0;
 wire e_m_b = FAST ? e_fb_m : m_wr && !m_c.late && m_c.rd == e_rt && e_rt != 0;
 wire e_w_a = FAST ? e_fa_w : w_wr && w_c.rd == e_rs && e_rs != 0;
 wire e_w_b = FAST ? e_fb_w : w_wr && w_c.rd == e_rt && e_rt != 0;
-wire [31:0] e_a  = e_m_a ? m_res : e_w_a ? w_res : e_ra;
-wire [31:0] e_b  = e_m_b ? m_res : e_w_b ? w_res : e_rb;
+// (FAST: the forwarding, the adder, the compares, the shifter and E's result are mips_ealu, below the core, which holds the multiplexers
+// as they are written: the module's own attribute, where the core's restructures them. The code that follows is the other builds')
+wire [31:0] ea_a, ea_b, ea_res; wire [32:0] ea_cs; wire ea_lt, ea_ltu, ea_eq;
+logic       e_k_shv, e_k_sub; logic [1:0] e_k_grp; logic [2:0] e_k_op; logic e_k_f;
+wire e_sl = e_c.alu == A_SLL;
+mips_ealu ealu (
+    .m_res, .w_res, .e_ra, .e_rb, .e_pc, .hi_r, .lo_r, .sa_m(e_fa_m), .sa_w(e_sa_w), .sa_r(e_sa_r), .sb_m(e_fb_m), .sb_w(e_sb_w), .sb_r(e_sb_r),
+    .k_shv(e_k_shv), .k_sub(e_k_sub), .sl(e_sl), .sra(e_c.alu == A_SRA), .k_grp(e_k_grp), .k_op(e_k_op), .k_f(e_k_f),
+    .imm(e_insn[15:0]), .shamt(e_insn[10:6]),
+    .a(ea_a), .b(ea_b), .res(ea_res), .cs(ea_cs), .lt(ea_lt), .ltu(ea_ltu), .eq(ea_eq)
+);
+wire [31:0] e_a  = FAST ? ea_a : e_m_a ? m_res : e_w_a ? w_res : e_ra;
+wire [31:0] e_b  = FAST ? ea_b : e_m_b ? m_res : e_w_b ? w_res : e_rb;
 
 wire [31:0] e_bv  = (!FAST && e_c.b_imm) ? (e_c.imm_zero ? {16'd0, e_insn[15:0]} : sx16(e_insn[15:0])) : e_b;
 // the compares, for slt and the traps (32 bits: with a 64-bit operand slt
 // runs at M and a trap is a Reserved Instruction -- d_cx)
 // (FAST: from the adder, which subtracts for all but an add -- e_k_sub: no borrow is "not below", and the difference's sign
 // decides a signed compare of operands of one sign)
-logic       e_k_sub;
 wire [32:0] e_cs;
-wire        e_lt   = FAST ? ((e_a[31] != e_bv[31]) ? e_a[31] : e_cs[31]) : $signed(e_a) < $signed(e_bv);
-wire        e_ltu  = FAST ? !e_cs[32] : e_a < e_bv;
-wire        e_eq   = e_a == e_bv;
+wire        e_lt   = FAST ? ea_lt : $signed(e_a) < $signed(e_bv);
+wire        e_ltu  = FAST ? ea_ltu : e_a < e_bv;
+wire        e_eq   = FAST ? ea_eq : e_a == e_bv;
 wire [5:0]  e_fn  = e_insn[5:0];
 // (FAST: whether the amount is rs's -- sllv, srlv, srav -- is a register set with e_insn, e_k_shv, so the shifter's
 // amount is one select after rs's forwarding and no decode of e_insn sits in front of it)
-logic       e_k_shv;
 wire [4:0]  e_sh  = (FAST ? e_k_shv : (e_fn == 6'h04 || e_fn == 6'h06 || e_fn == 6'h07)) ? e_a[4:0] : e_insn[10:6];
 
 // one shifter: SRL/SRA directly, SLL as a right shift of the bit-reversed value
 function automatic logic [31:0] rev32(input logic [31:0] v);
     for (int i = 0; i < 32; i++) rev32[i] = v[31 - i];
 endfunction
-wire        e_sl = e_c.alu == A_SLL;
 wire [32:0] e_shx = {e_c.alu == A_SRA && e_b[31], e_sl ? rev32(e_b) : e_b};
 wire [32:0] e_shr = $signed(e_shx) >>> e_sh;
 wire [31:0] e_shv = e_sl ? rev32(e_shr[31:0]) : e_shr[31:0];
@@ -1008,10 +1040,9 @@ wire [31:0] e_shv = e_sl ? rev32(e_shr[31:0]) : e_shr[31:0];
 // (FAST) the result by its kind, registered with the instruction: e_k_grp 0
 // add or subtract (e_k_sub), 1 a shift, 2 one of e_k_op's, 3 a compare (e_k_f:
 // unsigned) -- or nothing (e_k_op[0])
-logic [1:0] e_k_grp; logic [2:0] e_k_op; logic e_k_f;
 // (the carry out, for the upper word of a 64-bit add or subtract, which M does)
 wire        e_fsub = FAST ? e_k_sub : e_c.alu == A_SUB;
-assign      e_cs = {1'b0, e_a} + {1'b0, e_bv ^ {32{e_fsub}}} + 33'(e_fsub);
+assign      e_cs = FAST ? ea_cs : {1'b0, e_a} + {1'b0, e_bv ^ {32{e_fsub}}} + 33'(e_fsub);
 wire [31:0] e_addsub = e_cs[31:0];
 logic [31:0] e_misc;
 always_comb begin
@@ -1026,30 +1057,31 @@ always_comb begin
     default: e_misc = lo_r;
     endcase
 end
-logic [31:0] e_res;
+logic [31:0] e_res_o;
+wire  [31:0] e_res = FAST ? ea_res : e_res_o;
 always_comb begin
-    e_res = 32'd0;
+    e_res_o = 32'd0;
     if (FAST) begin
         case (e_k_grp)
-        2'd0: e_res = e_addsub;
-        2'd1: e_res = e_shv;
-        2'd2: e_res = e_misc;
-        default: e_res = {31'd0, !e_k_op[0] && (e_k_f ? e_ltu : e_lt)};
+        2'd0: e_res_o = e_addsub;
+        2'd1: e_res_o = e_shv;
+        2'd2: e_res_o = e_misc;
+        default: e_res_o = {31'd0, !e_k_op[0] && (e_k_f ? e_ltu : e_lt)};
         endcase
     end
     else case (e_c.alu)
-    A_ADD, A_SUB: e_res = e_cs[31:0];
-    A_LUI:   e_res = {e_insn[15:0], 16'd0};
-    A_SLL, A_SRL, A_SRA: e_res = e_shv;
-    A_LINK:  e_res = e_pc + 32'd8;
-    A_SLT:   e_res = {31'd0, e_lt};
-    A_SLTU:  e_res = {31'd0, e_ltu};
-    A_AND:   e_res = e_a & e_bv;
-    A_OR:    e_res = e_a | e_bv;
-    A_XOR:   e_res = e_a ^ e_bv;
-    A_NOR:   e_res = ~(e_a | e_bv);
-    A_MFHI:  e_res = hi_r;
-    A_MFLO:  e_res = lo_r;
+    A_ADD, A_SUB: e_res_o = e_cs[31:0];
+    A_LUI:   e_res_o = {e_insn[15:0], 16'd0};
+    A_SLL, A_SRL, A_SRA: e_res_o = e_shv;
+    A_LINK:  e_res_o = e_pc + 32'd8;
+    A_SLT:   e_res_o = {31'd0, e_lt};
+    A_SLTU:  e_res_o = {31'd0, e_ltu};
+    A_AND:   e_res_o = e_a & e_bv;
+    A_OR:    e_res_o = e_a | e_bv;
+    A_XOR:   e_res_o = e_a ^ e_bv;
+    A_NOR:   e_res_o = ~(e_a | e_bv);
+    A_MFHI:  e_res_o = hi_r;
+    A_MFLO:  e_res_o = lo_r;
     default: ;
     endcase
 end
@@ -1238,7 +1270,6 @@ wire [65:0]  dv_t   = {1'b0, dv_x} + dv_y + 66'(!dv_neg);
 wire         dv_ok  = !dv_t[65];                             // the remainder so far has the divisor in it
 wire         dv_nneg = md_ph == DV_Q ? md_nr ^ dv_neg : md_nr;
 wire [63:0]  dv_nin = md_ph == DV_R ? md_r : {md_ah, md_ma};
-wire [63:0]  dv_n   = (dv_nin ^ {64{dv_nneg}}) + 64'(dv_nneg);
 // which words of HI and LO are not 32-bit values (the upper word is not the lower word's sign)
 wire         lo_isw = lo_up != {32{lo_r[31]}}, hi_isw = hi_up != {32{hi_r[31]}}, mt_isw = md_ah != {32{md_ma[31]}};
 // =============================================================== M
@@ -1258,6 +1289,10 @@ ms_t ms;
 // a mapped access spends a cycle in MS_XLAT with its translation registered
 // (m_tlbq): from the micro-TLB, or after a search (MS_WALK)
 logic [34:0] m_tlbq;
+// (what the translation faults on, found as it is registered -- not from m_tlbq's bits at every use: a fault of the entry (invalid, a store to a
+// clean page: m_tq_bad), and an access to a physical address that is not RDRAM, by the upper bits of the page (m_tq_hi) and by bit 22 for a
+// console without the Expansion Pak (m_tq_22). m_tlb_fault, and with it the flush, are then a function of registers alone, one level)
+logic        m_tq_bad, m_tq_hi, m_tq_22;
 logic        m_tlbc;                         // (PGD) the translation's entry is cacheable
 logic        m_xc1;                          // (PGD) MS_XLAT's second cycle: the cache's word and tag at the physical index
 logic        m_wq;                           // MS_WALK: the scanner took the request
@@ -1266,9 +1301,8 @@ wire [31:0] m_pa = m_kseg ? kphys(m_addr) : tphys({m_tlbq[31:12], m_addr[11:0]})
 // TLB_EN with the monitor: the game's access through a valid page to a physical address that is not its RDRAM (the console's
 // RCP registers, cartridge, a bus with nothing on it) is the device access of an unmapped address -- an address error for the
 // monitor level, which answers it -- with COP0 22 holding the physical address the page gave
-wire m_tdev = TLB_EN && MON && N64WIN && FLAT && mon_game && !c0_status[2] && m_mapped && ms == MS_XLAT && m_tlbq[34] && m_tlbq[33] &&
-              !(m_st && !m_tlbq[32]) && (m_tlbq[31:23] != 9'd0 || (mon_mem4 && m_tlbq[22]));
-wire m_tlb_fault = m_mapped && ms == MS_XLAT && (!m_tlbq[34] || !m_tlbq[33] || (m_st && !m_tlbq[32]) || m_tdev);
+wire m_tdev = TLB_EN && MON && N64WIN && FLAT && mon_game && !c0_status[2] && m_mapped && ms == MS_XLAT && (m_tq_hi || (mon_mem4 && m_tq_22));
+wire m_tlb_fault = m_mapped && ms == MS_XLAT && (m_tq_bad || m_tdev);
 wire [4:0] m_tlb_code = m_tdev ? (m_st ? 5'd5 : 5'd4) : (!m_tlbq[34] || !m_tlbq[33]) ? (m_st ? 5'd3 : 5'd2) : 5'd1;
 wire m_wide = FAST ? m_k_wide :
               (m_c.ld == M_FL && m_insn[31:26] == 6'h35) || (m_c.st == S_FS && m_insn[31:26] == 6'h3D) ||   // ldc1, sdc1
@@ -1283,8 +1317,7 @@ wire m_cached = FAST ? m_k_cach : cacheable(m_addr, game_view);
 // a cache instruction): an access right behind it read the tag in the edge
 // that cleared it
 logic        tk_valid; logic [DC_LOG2-1:0] tk_idx;
-wire m_dc_hit = dc_tq[16] && dc_tq[15:0] == m_pa[28:13] &&   // (physically tagged; index bits pa == va)
-                !(tk_valid && tk_idx == m_addr[DW+1:4]);
+wire m_dc_hit;       // (mips_dchit, below the core, once the commit is declared: the tag's hit, physically tagged -- index bits pa == va)
 // FAST: a load's word is taken as it is; m_lmiss, late in the cycle, says it
 // was not its line's. In a delay slot the load has waited a cycle: m_hit_r
 logic m_w1, m_hit_r;
@@ -1360,7 +1393,10 @@ wire         dv_32  = XDIV && (m_c.md == MD_DIV || m_c.md == MD_DIVU);
 wire         dv_s32 = m_c.md == MD_DIV;
 wire [63:0]  dv_a   = dv_32 ? {{32{dv_s32 && m_a_lo[31]}}, m_a_lo} : m_a64;
 wire         dv_as  = (m_c.md == MD_DIV || m_c.md == MD_DDIV) && dv_a[63];     // the dividend is negative
-wire [63:0]  dv_an  = (dv_a ^ {64{dv_as}}) + 64'(dv_as);
+// (one negator: the dividend's magnitude as a divide starts is taken while no divide is under way (md_dvon clear), the quotient's and the
+// remainder's sign changes while one is: the two never meet)
+wire [63:0]  dv_n   = ((md_dvon ? dv_nin : dv_a) ^ {64{md_dvon ? dv_nneg : dv_as}}) + 64'(md_dvon ? dv_nneg : dv_as);
+wire [63:0]  dv_an  = dv_n;
 wire [31:0]  m_xha = m_a_hx ^ {32{m_a_lo[31]}};
 wire [31:0]  m_xhb = m_c.b_imm ? (m_c.imm_zero ? 32'd0 : {32{m_insn[15]}}) : m_st_hx ^ {32{m_st_lo[31]}};
 // (FAST: a compare is the 64-bit subtraction too -- E's adder subtracts the lower words for it (e_k_sub), its carry is m_xc,
@@ -1498,7 +1534,7 @@ wire [4:0] m_code = m_exc_v ? m_exc_code : m_tlb_code;
 wire m_fxr = TLB_EN && m_exc_v && m_exc_code == 5'd18;       // a fetch no entry named (the refill vector); code 18 is TLBL's, as the pipeline carries it
 // (an interrupt that is taken instead of the instruction in M, which may have faulted -- a fetch the TLB has no entry for -- is
 //  not a refill: it goes to the general vector, and the fault comes again when the handler has returned)
-wire m_refill = !m_take_int && ((!m_exc_v && m_tlb_fault && !m_tlbq[34]) || m_fxr);
+wire m_refill = !m_take_int && ((!m_exc_v && !m_tlbq[34]) || m_fxr);        // (read only while an exception is taken: with no exception from E, it is the translation's)
 wire [4:0] m_ccode = m_fxr ? 5'd2 : m_code;                  // Cause.ExcCode
 // a TLB exception: BadVAddr, Context and EntryHi take the page
 wire m_tlbx = TLB_EN && ((!m_exc_v && m_tlb_fault && !m_tdev) || (m_exc_v && (m_exc_code == 5'd2 || m_fxr)));
@@ -1510,9 +1546,7 @@ wire m_to_mon  = MON && mon_game && !c0_status[2] &&
                  (m_take_int ? m_mon_int : (m_take_exc && (m_exc_v ? (m_dev || m_exc_code == 5'd10 || (TLB_RAM && m_exc_code == 5'd2)) : (TLB_RAM || m_tdev))));   // (TLB_EN: a TLB exception is the game's)
 // a translation fault (a fetch's, code 2 from E, or an access's, found here) that the monitor level takes
 wire m_tr_mon  = TLB_RAM && m_to_mon && m_take_exc && (!m_exc_v || m_exc_code == 5'd2);
-// (the game's own handler: an exception of the game's code that a console takes)
-wire m_to_game = MON && mon_game && (m_take_int || m_take_exc) && !m_to_mon && n64code(m_pc, game_view);
-wire m_live = m_valid && !m_take_int && !m_take_exc;
+wire m_live = m_valid && !m_take_int && !m_exc_v && !m_tlb_fault;
 
 logic m_k_sc;                                // (FAST: sc, registered with it)
 wire m_sc_fail = (FAST ? m_k_sc : m_c.st == S_SC) && !ll_bit;
@@ -1564,6 +1598,14 @@ wire           ck_dalias = (m_insn[20:16] == 5'h11 || m_insn[20:16] == 5'h15) &&
 wire           ck_run = !m_insn[20] || ck_isw || ck_dalias;
 wire  [CK_W:0] ck_last = ck_dalias ? (CK_W + 1)'((1 << CK_WD) - 1) : ck_isw ? (CK_W + 1)'((1 << (IC_LOG2 - 7)) - 1) :
                          (CK_W + 1)'((m_insn[17:16] == 2'd0 ? (1 << (IC_LOG2 - 9)) : (1 << (DC_LOG2 - 9))) - 1);
+// (FAST: the same, with what comes latest -- the write buffer's full, the FPU's and the multiplier's busy, a shift on -- ANDed last, not as
+// the overrides of a chain: m_done is a few levels of M's registers, wb_full and the busy flags entering the last)
+wire m_wbsel = !m_cl && !(m_c.tlbp || m_c.tlbr) && m_st && (m_cw || (!m_needs_slow && !m_sc_fail));      // (a store whose completion waits for the buffer)
+wire m_done_b = m_cw ? m_ph : (m_ld && m_cached) ? (ms == MS_DONE || (ms == MS_IDLE && m_lhit)) : m_needs_slow ? ms == MS_DONE : 1'b1;
+wire m_done_x = (m_c.tlbp || m_c.tlbr) ? ms == MS_DONE : m_cl ? ms == MS_DONE : (m_mapped && (ms == MS_IDLE || ms == MS_WALK)) ? 1'b0 : m_done_b;
+wire m_done_z = (m_k_fpu && fpu_busy) || (m_is_md && md_busy) || ms == MS_REFILL || ms == MS_REREAD || m_shwait ||
+                (CK_W != 0 && m_c.cache && ck_run && ck_n != ck_last);
+wire m_done_f = !m_valid || (m_done_x && !m_done_z && !(m_wbsel && wb_full));
 logic m_done;
 always_comb begin
     m_done = 1'b1;
@@ -1585,6 +1627,7 @@ always_comb begin
         if (m_shwait) m_done = 1'b0;                                // (a d-shift: still shifting)
         if (CK_W != 0 && m_c.cache && ck_run && ck_n != ck_last) m_done = 1'b0;
     end
+    if (FAST) m_done = m_done_f;
 end
 wire m_stall = (FAST ? m_valid : m_live) && !m_done;
 wire m_cache_go = m_live && m_c.cache && !(FAST && (ms == MS_REFILL || ms == MS_REREAD));
@@ -1592,16 +1635,38 @@ assign m_w0 = m_live && m_cw && !m_ph && ms == MS_IDLE && (m_st ? !wb_full : m_l
 assign m_lmiss = FAST && m_live && m_ld && m_cached && !m_dly && ms == MS_IDLE && !m_ph && !m_dc_hit;
 assign m_commit_e = m_live && m_done;       // (M always advances when done)
 wire m_commit = m_commit_e && !m_lmiss;     // (FAST: but a load of the wrong line)
+// the D-cache's hit and what hangs on it -- the RAM write enables and the store buffer's -- one module with the multiplexers as written
+// (the core's restructuring lengthens the tag compare's path to the write enables of the RAM)
+wire st_go = (m_commit_e || m_w0) && m_st && !m_sc_fail;      // a store's word completes this cycle
+wire st_dc_we, st_sb_we;
+mips_dchit #(.DC_LOG2(DC_LOG2)) dchit (
+    .dc_tq, .pa_tag(m_pa[28:13]), .tk_valid, .tk_idx, .idx(m_addr[DW+1:4]),
+    .go(st_go), .commit(m_commit_e && m_st && !m_sc_fail), .cached(m_cached),
+    .hit(m_dc_hit), .dc_we(st_dc_we), .sb_we(st_sb_we)
+);
 
 // =============================================================== pipeline advance
 wire m_adv = !m_stall;
 wire e_adv = m_adv;
 wire d_adv = e_adv && !d_stall;
-wire flush = m_take_int || m_take_exc || (m_commit_e && m_c.eret) || (FAST && rp_pend);
+// (an eret completes at once -- FAST: it is no access, no FPU or multiply operation, no cache op and no shift, the flags the rest of m_done
+// waits on, so only the refill that M's state machine may be in holds it: not m_done's whole cone in front of the fetch's redirect)
+// (FAST: an eret is no access, so no translation fault holds it back: m_live without m_tlb_fault)
+wire m_eret_go = FAST ? m_valid && !m_take_int && !m_exc_v && m_c.eret && ms != MS_REFILL && ms != MS_REREAD : m_commit_e && m_c.eret;
+wire m_take_any = m_take_int || (m_valid && (m_exc_v || m_tlb_fault));      // (m_take_int || m_take_exc: an interrupt is taken whether or not E faulted)
+// (FAST, flush: an eret in M with an interrupt or an exception taken flushes anyway, so the eret's term here is M's valid and its flags alone;
+// m_eret_go, which the vector is chosen by, is the one that the exception does not hold back)
+wire m_eret_f = FAST ? m_valid && m_c.eret && ms != MS_REFILL && ms != MS_REREAD : m_eret_go;
+wire flush = m_take_any || m_eret_f || (FAST && rp_pend);
+// (the vector is read only while flush: with rp_pend and the eret decided above it, what is left is an interrupt or an exception, so
+// the monitor-or-game choice is not asked whether one is taken -- m_take_int, m_take_exc and the translation fault's cone stay out of it)
+wire m_to_mon_f = MON && mon_game && !c0_status[2] &&
+                  (m_take_int ? m_mon_int : (m_exc_v ? (m_dev || m_exc_code == 5'd10 || (TLB_RAM && m_exc_code == 5'd2)) : (TLB_RAM || m_tdev)));
+wire m_to_game = MON && mon_game && !m_to_mon_f && n64code(m_pc, game_view);
 logic [31:0] flush_pc;
 always_comb begin
     if (FAST && rp_pend) flush_pc = w_pc;
-    else if (m_commit_e && m_c.eret) flush_pc = c0_status[2] ? c0_errorepc : c0_epc;
+    else if (m_eret_go) flush_pc = c0_status[2] ? c0_errorepc : c0_epc;
     else if (m_to_game) flush_pc = (m_refill && !c0_status[1]) ? 32'h8000_0000 : 32'h8000_0180;     // (the TLB refill vector, when no exception is being handled)
     else flush_pc = (c0_status[22] ? 32'hBFC00200 : EXC_BASE) + ((m_refill && !c0_status[1] && !FLAT) ? 32'h0 : 32'h180);   // (FLAT: one vector -- a miss there is the runtime's to report)
 end
@@ -1839,12 +1904,10 @@ always_comb begin
         if (ms_cnt == 3'd7) begin dct_we = 1; dct_waddr = m_fpa[DW+1:4]; dct_wdata = {!sn_kill, m_fpa[28:13]}; end
     end
     // a store's word: into the D-cache (hit), or drop the line an uncached store may shadow
-    if ((m_commit_e || m_w0) && m_st && !m_sc_fail) begin
-        if (m_cached && m_dc_hit) begin
-            dc_we = 1; dc_wbe = m_cst_strb;
-        end else if (!m_cached && pa_cached(m_pa)) begin
-            dct_we = 1; dct_waddr = m_pa[DW+1:4]; dct_wdata = 17'd0;
-        end
+    if (st_dc_we) begin
+        dc_we = 1; dc_wbe = m_cst_strb;
+    end else if (st_go && !m_cached && pa_cached(m_pa)) begin
+        dct_we = 1; dct_waddr = m_pa[DW+1:4]; dct_wdata = 17'd0;
     end
     // (the D-cache's write address and data do not wait for the conditions of the write -- they are
     // the enables' -- but go by the port only: no store completes while a line is coming in)
@@ -1931,7 +1994,7 @@ always_comb begin
     tr_retire = w_ok;
     tr_pc = w_pc; tr_insn = w_insn;
     tr_wr = w_wr; tr_rd = w_c.rd; tr_val = v64(w_hx, w_res);
-    tr_exc = m_take_int || m_take_exc;
+    tr_exc = m_take_any;
     tr_exc_int = m_take_int;
     tr_exc_pc = m_pc;
     tr_exc_code = m_take_int ? 5'd0 : m_ccode;
@@ -1939,14 +2002,13 @@ end
 
 // COP1: at M; its results are written as the instruction completes
 wire m_fpu = FAST ? m_k_fpu : m_c.cop1 || m_c.ld == M_FL || m_c.st == S_FS;
-fpu_n64 #(.FAST(FAST), .D64(XFPD)) fpu (
-    .clk, .rst,
+fpu_n64 #(.FAST(FAST), .D64(XFPD), .FR1(FR1)) fpu (
+    .clk, .rst, .fr(c0_status[26]),
     .insn_next(m_adv ? e_insn : m_insn), .insn(m_insn), .insn_e(e_insn), .adv(m_adv),
     .live((FAST ? m_valid : m_live) && m_fpu), .valid(fpu_valid),      // (FAST: an instruction taken out by an exception is not in M the next cycle; the flush is not in the FPU's state)
     .cancel(FAST && w_lm), .gpr_in(m_st_lo), .gpr_in_hi(m_st_hx ^ {32{m_st_lo[31]}}), .mem_in(m_wide ? m_w64 : {32'd0, m_word}),
     .gpr_out(fpu_gpr_out), .gpr_out_hi(fpu_gpr_out_hi), .mem_out(fpu_mem_out), .cond(fpu_cond), .busy(fpu_busy),
-    .tr_we_even(tr_fwe_even), .tr_we_odd(tr_fwe_odd), .tr_widx(tr_fwidx),
-    .tr_weven(tr_fweven), .tr_wodd(tr_fwodd), .tr_fcr31(tr_fcr31)
+    .tr_we_lo(tr_fwe_lo), .tr_we_hi(tr_fwe_hi), .tr_widx(tr_fwidx), .tr_wlo(tr_fwlo), .tr_whi(tr_fwhi), .tr_fcr31(tr_fcr31)
 );
 assign fpu_valid = (FAST ? m_commit_e : m_commit) && m_fpu;    // (FAST: a load's write is taken back with w_lm)
 
@@ -1974,15 +2036,50 @@ always_ff @(posedge clk) begin
     end
 end
 
+// D -> E: the registers' upper words, cleared when the register is in flight (rf_ah, rf_bh: the register file's word, or zero)
+wire e_ld_d = !rst && !flush && e_adv;
+mips_ldr #(32) e_rah (.clk, .en(e_ld_d), .clr(!W64 || d_rs == 0 || inflight_rs), .d(rfq_ah), .q(e_ra_hx));
+mips_ldr #(32) e_rbh (.clk, .en(e_ld_d), .clr(!W64 || d_rt == 0 || inflight_rt), .d(rfq_bh), .q(e_rb_hx));
+
+// =============================================================== COP0's registers that only take values (mips_c0r, below)
+// Count, Compare, EntryHi, EntryLo0/1, Context, PageMask, EPC, ErrorEPC, BadVAddr and the monitor level's BadVAddr (COP0 22): what writes
+// them is found here, as enables in the order of precedence of the sequential block they were written in -- an exception's, mtc0's (it
+// wins over the exception's: the two do not happen together) and tlbr's, the last.
+// (a translation fault the monitor level takes -- TLB_RAM -- leaves the game's BadVAddr and EntryHi as they are; a device access of
+// the game's, in the monitor, leaves BadVAddr alone: the runtime works the address out; TLB_RAM: a fetch's too -- its page's entry
+// is the runtime's to fill; TLB_EN, a device behind a mapped page: the monitor level reads the page's physical address)
+wire c0_step = SIM_COUNT_RETIRE ? (m_commit || m_take_exc) : 1'b1;
+wire c0_cnt_hit;
+wire c0_mtw = m_commit_e && m_c.mtc0;
+mips_c0r c0r (
+    .clk, .rst, .step(c0_step), .count_frac,
+    .m_st_lo, .m_epc, .m_badv, .m_addr, .m_exc_v, .m_page(m_tlbq[31:12]),
+    .e_mask(sc_e.mask), .e_vpn(sc_e.vpn), .e_asid(sc_e.asid), .e_lo0(sc_e.lo0), .e_lo1(sc_e.lo1), .e_g(sc_e.g),
+    .w_count(c0_mtw && m_insn[15:11] == 5'd9), .w_compare(c0_mtw && m_insn[15:11] == 5'd11),
+    .w_epc_mt(c0_mtw && m_insn[15:11] == 5'd14), .w_eepc_mt(c0_mtw && m_insn[15:11] == 5'd30),
+    .w_bv_mt(c0_mtw && m_insn[15:11] == 5'd8 && (TLB_RAM || TLB_EN) && MON && c0_status[2]),
+    .w_ctx_hi(c0_mtw && m_insn[15:11] == 5'd4), .w_ctx_lo(c0_mtw && m_insn[15:11] == 5'd4 && MON && c0_status[2]),
+    .w_el0(c0_mtw && m_insn[15:11] == 5'd2), .w_el1(c0_mtw && m_insn[15:11] == 5'd3),
+    .w_pm(c0_mtw && m_insn[15:11] == 5'd5), .w_eh(c0_mtw && m_insn[15:11] == 5'd10),
+    .x_eepc(m_take_any && m_to_mon), .x_epc(m_take_any && !m_to_mon && !c0_status[1]),
+    .x_bv(m_take_exc && m_exc_v && (m_code == 5'd4 || m_code == 5'd5 || (TLB_RAM && m_code == 5'd2)) && !(m_to_mon && m_dev) && !m_tr_mon),
+    .x_eh_r(m_take_exc && TLB_RAM && m_exc_v && m_code == 5'd2 && !m_tr_mon),
+    .x_mbv_r(m_take_exc && m_tr_mon), .x_mbv_t(m_take_exc && m_tdev),
+    .x_ma(m_take_exc && !TLB_EN && !m_exc_v && !m_tr_mon), .x_ctx_ma(m_take_exc && !TLB_EN && !m_exc_v && !m_tr_mon && !TLB_RAM),
+    .x_tlbx(m_take_exc && m_tlbx),
+    .w_tlbr(sc == SC_RUN && sc_mode == SCM_READ),
+    .count(c0_count), .compare(c0_compare), .entryhi(c0_entryhi), .entrylo0(c0_entrylo0), .entrylo1(c0_entrylo1), .ctx(c0_context),
+    .pagemask(c0_pagemask), .badvaddr(c0_badvaddr), .epc(c0_epc), .errorepc(c0_errorepc), .mon_badv, .cnt_hit(c0_cnt_hit)
+);
+
 // =============================================================== sequential
 integer k;
 always_ff @(posedge clk) begin
     if (rst) begin
         f_pc <= reset_pc; f_ok <= 0; fs <= FS_RUN; ds_next <= 0; rd_pend <= 0; f_discard <= 0;
         d_valid <= 0; e_valid <= 0; m_valid <= 0; w_valid <= 0;
-        c0_status <= 32'h34000000; c0_config <= 32'h7006E463; c0_cause <= 0; c0_count <= 0; c0_compare <= 0;
-        c0_wired <= 0; c0_index <= 0; c0_entryhi <= 0; c0_entrylo0 <= 0; c0_entrylo1 <= 0; c0_pagemask <= 0;
-        c0_context <= 0; c0_epc <= 0; c0_errorepc <= 0; c0_badvaddr <= 0;
+        c0_status <= 32'h34000000; c0_config <= 32'h7006E463; c0_cause <= 0;
+        c0_wired <= 0; c0_index <= 0;
         count_frac <= 0; c0_random <= 5'd31; ll_bit <= 0; fcc <= 0;
         hi_r <= 0; lo_r <= 0; hi_up <= 0; lo_up <= 0; hi_wide <= 0; lo_wide <= 0; m_ph <= 0; sh_on <= 0; m_shwait <= 0; m_xshift <= 0;
         hilo_soft <= 0; tr_lastf <= 0; mon_game <= 0; mon_mi <= 0; mon_bd <= 0; mon_code <= 0; mon_mem4 <= 0; mon_klo <= 0; mon_sp <= 0;
@@ -1995,15 +2092,10 @@ always_ff @(posedge clk) begin
     end else begin
         // ---------------------------------------------------- Count / Compare
         begin
-            automatic logic step;
-            step = SIM_COUNT_RETIRE ? (m_commit || m_take_exc) : 1'b1;
-            if (step) begin
+            if (c0_step) begin
                 c0_random <= rnd_dec;
                 count_frac <= !count_frac;
-                if (count_frac) begin
-                    c0_count <= c0_count + 32'd1;
-                    if (c0_count + 32'd1 == c0_compare) c0_cause[15] <= 1'b1;
-                end
+                if (c0_cnt_hit) c0_cause[15] <= 1'b1;
             end
         end
         c0_cause[10] <= irq_rcp;
@@ -2013,7 +2105,7 @@ always_ff @(posedge clk) begin
         w_lm <= m_lmiss;
         w_pc <= m_pc;           // (every cycle: the pc that M had last cycle -- a load that took another line's word is run again from it, whether it moved on to W or not)
         if (m_commit_e) begin
-            w_c <= m_c; w_insn <= m_insn; w_serial <= m_serial;
+            w_c <= m_c; w_insn <= m_insn; w_serial <= m_serial; w_k_wprod <= m_k_wprod;
             if (FAST) begin
                 w_res <= m_wres_d;
                 w_hx <= W64 ? m_whx_d : 32'd0;
@@ -2036,51 +2128,29 @@ always_ff @(posedge clk) begin
         end
 
         // ---------------------------------------------------- M: exceptions
-        if (m_take_int || m_take_exc) begin
+        if (m_take_any) begin
             if (m_to_mon) begin
                 // the monitor level (MON): ERL and ErrorEPC; what the game's handler may be in the middle of is not touched
-                c0_errorepc <= m_epc;
                 c0_status[2] <= 1'b1;
                 mon_bd <= m_dly; mon_code <= m_take_int ? 5'd31 : m_code;
             end else begin
-                if (!c0_status[1]) begin
-                    c0_epc <= m_epc;
-                    c0_cause[31] <= m_dly;
-                end
+                if (!c0_status[1]) c0_cause[31] <= m_dly;
                 c0_cause[6:2] <= m_take_int ? 5'd0 : m_ccode;
                 c0_cause[29:28] <= (!m_take_int && m_exc_v && m_code == 5'd11) ? 2'd1 : 2'd0;   // CE: COP1
                 c0_status[1] <= 1'b1;
             end
             if (m_take_exc) begin
-                // (TLB_RAM: a fetch's too -- its page's entry is the runtime's to fill; a device access of the
-                // game's, in the monitor, leaves BadVAddr alone: the runtime works the address out)
-                if (m_exc_v && (m_code == 5'd4 || m_code == 5'd5 || (TLB_RAM && m_code == 5'd2)) && !(m_to_mon && m_dev) && !m_tr_mon) c0_badvaddr <= m_badv;
                 if (TLB_RAM && m_code >= 5'd1 && m_code <= 5'd3) tr_lastf <= m_exc_v;
-                if (TLB_RAM && m_exc_v && m_code == 5'd2 && !m_tr_mon) c0_entryhi <= (m_badv & 32'hFFFFE000) | (c0_entryhi & 32'hFF);
-                // (the monitor level's: the game's BadVAddr and EntryHi stay as they are)
-                if (m_tr_mon) mon_badv <= m_exc_v ? m_badv : m_addr;
-                // (TLB_EN, a device behind a mapped page: the monitor level reads the page's physical address)
-                if (m_tdev) mon_badv <= {m_tlbq[31:12], m_addr[11:0]};
-                if (!TLB_EN && !m_exc_v && !m_tr_mon) begin         // a TLB fault
-                    c0_badvaddr <= m_addr;
-                    if (!TLB_RAM) c0_context <= (c0_context & 32'hFF800000) | ((m_addr >> 13) << 4);
-                    c0_entryhi <= (m_addr & 32'hFFFFE000) | (c0_entryhi & 32'hFF);
-                end
-                if (m_tlbx) begin                                   // a TLB exception: BadVAddr, Context's BadVPN2 and EntryHi's VPN2 take the address
-                    c0_badvaddr <= m_badv;
-                    c0_context <= (c0_context & 32'hFF800000) | ((m_badv >> 13) << 4);
-                    c0_entryhi <= (m_badv & 32'hFFFFE000) | (c0_entryhi & 32'hFF);
-                end
             end
         end
 
         // ---------------------------------------------------- M: completing
-        sb_valid <= 0;
+        // (the store buffer is a one-cycle pulse: sb_valid is set for the cycle after a store's completion, and its address, word and strobes are
+        // read only then -- they are the store's if they are loaded every cycle, with no enable behind the completion's whole cone)
+        sb_valid <= st_sb_we;
+        sb_waddr <= m_cst_idx; sb_data <= m_cst_data; sb_strb <= m_cst_strb;
         tk_valid <= dct_we && !dct_wdata[16]; tk_idx <= dct_waddr;
         if (m_commit_e) begin
-            if (m_st && !m_sc_fail && m_cached && m_dc_hit) begin
-                sb_valid <= 1; sb_waddr <= m_cst_idx; sb_data <= m_cst_data; sb_strb <= m_cst_strb;
-            end
             if (m_c.ld == M_LL && !m_lmiss) ll_bit <= 1'b1;
             if (m_c.st == S_SC) ll_bit <= 1'b0;
             if (m_c.cop1 && m_c.cop1_cond) fcc <= fpu_cond;
@@ -2091,30 +2161,22 @@ always_ff @(posedge clk) begin
             if (m_c.mtc0) begin
                 case (m_insn[15:11])
                 5'd1, 5'd15: ;                                      // Random, PRId: read-only
-                5'd9:  begin c0_count <= m_st_lo; count_frac <= 1'b0; end   // (a write starts Count's half-rate phase again, as the VR4300's)
-                5'd11: begin c0_compare <= m_st_lo; c0_cause[15] <= 1'b0; end
+                5'd9:  count_frac <= 1'b0;   // (a write starts Count's half-rate phase again, as the VR4300's)
+                5'd11: c0_cause[15] <= 1'b0;
                 5'd13: begin c0_cause[9:8] <= m_st_lo[9:8];
                              // (the monitor level delivers a TLB exception to the game: its BD and ExcCode are its to set)
                              if (MON && c0_status[2]) begin c0_cause[31] <= m_st_lo[31]; c0_cause[6:2] <= m_st_lo[6:2]; end end
                 // the VR4300's writable bits (the constant rest is not stored; BadVAddr,
                 // XContext, TagHi and the reserved registers take no write)
                 // (BadVAddr: the monitor level's, for the TLB exception it delivers to the game -- and to put the game's back, a state loaded)
-                5'd8:  if ((TLB_RAM || TLB_EN) && MON && c0_status[2]) c0_badvaddr <= m_st_lo;
                 5'd0:  begin c0_index[5:0] <= m_st_lo[5:0]; c0_index[31] <= m_st_lo[31]; end   // (P is writable, as the VR4300's)
-                5'd2:  c0_entrylo0 <= m_st_lo & 32'h3FFFFFFF; 5'd3: c0_entrylo1 <= m_st_lo & 32'h3FFFFFFF;
-                5'd4:  begin c0_context[31:23] <= m_st_lo[31:23];
-                             // (likewise its BadVPN2: the tables' faults do not set it)
-                             if (MON && c0_status[2]) c0_context[22:4] <= m_st_lo[22:4]; end
-                5'd5:  c0_pagemask <= m_st_lo & 32'h01FFE000;
                 5'd6:  begin c0_wired <= m_st_lo & 32'h3F; c0_random <= 5'd31; end
                 5'd7:  begin hilo_soft <= W64 && !XMD && m_st_lo[0]; if (MON) mon_game <= m_st_lo[1]; if (MON && MI && m_st_lo[9]) mon_mi <= m_st_lo[8];
                              if (MON && m_st_lo[11]) mon_mem4 <= m_st_lo[10];          // (bit 11: the write is of bit 10)
                              if (MAP_HI && m_st_lo[13]) mon_klo <= m_st_lo[12];        // (bit 13: of bit 12)
                              if (SPW && m_st_lo[15]) mon_sp <= m_st_lo[14]; end        // (bit 15: of bit 14)
-                5'd10: c0_entryhi <= m_st_lo & 32'hFFFFE0FF;  5'd12: c0_status <= m_st_lo & 32'hFFF7FFFF;   // (Status bit 19 is not writable)
-                5'd14: c0_epc <= m_st_lo;
+                5'd12: c0_status <= m_st_lo & 32'hFFF7FFFF;   // (Status bit 19 is not writable)
                 5'd16: c0_config <= (c0_config & ~32'h0F00800F) | (m_st_lo & 32'h0F00800F);
-                5'd30: c0_errorepc <= m_st_lo;
                 default: ;
                 endcase
             end
@@ -2173,7 +2235,7 @@ always_ff @(posedge clk) begin
             m_xshift <= XSH && (e_c.x64 == X_SLL || e_c.x64 == X_SRL || e_c.x64 == X_SRA);
             m_shwait <= XSH && (e_c.x64 == X_SLL || e_c.x64 == X_SRL || e_c.x64 == X_SRA);
             m_xc <= e_cs[32]; m_xltu <= e_ltu; m_k_ua <= e_ua;
-            m_c <= e_c; m_pc <= e_pc; m_insn <= e_insn; m_dly <= e_dly; m_serial <= e_serial;
+            m_c <= e_c; m_pc <= e_pc; m_insn <= e_insn; m_dly <= e_dly; m_serial <= e_serial; m_k_wprod <= wideprod(e_c);
             m_res <= e_res;
             m_addr <= e_ea;
             if (FAST) begin
@@ -2213,15 +2275,18 @@ always_ff @(posedge clk) begin
             e_rs <= d_rs; e_rt <= d_rt;
             e_ra <= rf_a; e_rb <= rf_b;
             if (FAST) begin
+                logic fa_m_n, fa_w_n, fb_m_n, fb_w_n;
                 if (d_c.b_imm) e_rb <= d_c.imm_zero ? {16'd0, d_insn[15:0]} : sx16(d_insn[15:0]);
                 // (JT: a register jump's second operand is the target it was guessed to go to: e_eq is the check)
                 else if (JT && d_c.br == B_JR) e_rb <= d_ptarget;
-                e_fa_m <= e_wr && !e_c.late && e_c.rd == d_rs && d_rs != 0;
-                e_fa_w <= m_wr && m_c.rd == d_rs && d_rs != 0;
-                e_fb_m <= !d_c.b_imm && !(JT && d_c.br == B_JR) && e_wr && !e_c.late && e_c.rd == d_rt && d_rt != 0;
-                e_fb_w <= !d_c.b_imm && !(JT && d_c.br == B_JR) && m_wr && m_c.rd == d_rt && d_rt != 0;
+                fa_m_n = e_wr && !e_c.late && e_c.rd == d_rs && d_rs != 0;
+                fa_w_n = m_wr && m_c.rd == d_rs && d_rs != 0;
+                fb_m_n = !d_c.b_imm && !(JT && d_c.br == B_JR) && e_wr && !e_c.late && e_c.rd == d_rt && d_rt != 0;
+                fb_w_n = !d_c.b_imm && !(JT && d_c.br == B_JR) && m_wr && m_c.rd == d_rt && d_rt != 0;
+                e_fa_m <= fa_m_n; e_fa_w <= fa_w_n; e_fb_m <= fb_m_n; e_fb_w <= fb_w_n;
+                e_sa_w <= fa_w_n && !fa_m_n; e_sa_r <= !fa_m_n && !fa_w_n;
+                e_sb_w <= fb_w_n && !fb_m_n; e_sb_r <= !fb_m_n && !fb_w_n;
             end
-            e_ra_hx <= rf_ah; e_rb_hx <= rf_bh;
             e_aw <= rf_aw;
             e_hxeq <= (rf_aw && rf_bw) ? rfq_ah == rfq_bh : !rf_aw && !rf_bw;     // (a masked hx is zero)
             e_fexc <= d_fexc; e_fexc_code <= d_fexc_code;
@@ -2256,7 +2321,7 @@ always_ff @(posedge clk) begin
             // cycle, so an operand it supplies is kept here
             if (e_w_a) e_ra <= w_res;
             if (e_w_b) e_rb <= w_res;
-            if (FAST) begin e_fa_w <= 1'b0; e_fb_w <= 1'b0; end
+            if (FAST) begin e_fa_w <= 1'b0; e_fb_w <= 1'b0; e_sa_w <= 1'b0; e_sb_w <= 1'b0; e_sa_r <= !e_fa_m; e_sb_r <= !e_fb_m; end
         end
 
         // ---------------------------------------------------- F -> D
@@ -2383,7 +2448,7 @@ always_ff @(posedge clk) begin
         MS_IDLE: if (m_live && (m_c.tlbp || m_c.tlbr)) begin ms <= MS_WALK; m_wq <= 0; end
         else if (m_live && m_mem) begin
             if (m_mapped) begin
-                if (TLB_EN && utlb_hit(utlb_m, m_addr)) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); m_tlbc <= 1'b0; end
+                if (TLB_EN && utlb_hit(utlb_m, m_addr)) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); {m_tq_bad, m_tq_hi, m_tq_22} <= tq_flags(utlb_res(utlb_m.x, m_addr), m_st); m_tlbc <= 1'b0; end
                 else begin ms <= MS_WALK; m_wq <= 0; end
             end
             else if (m_ld && m_cached && !m_dc_hit && !m_ph) begin ms <= MS_REFILL; ms_cnt <= 0; end
@@ -2396,6 +2461,7 @@ always_ff @(posedge clk) begin
                 else begin
                     ms <= MS_XLAT;
                     m_tlbq <= sc_hit ? utlb_res(sc_x, m_addr) : 35'd0;
+                    {m_tq_bad, m_tq_hi, m_tq_22} <= tq_flags(sc_hit ? utlb_res(sc_x, m_addr) : 35'd0, m_st);
                     m_tlbc <= TLB_RAM && sc_hit && sc_x.c;
                     if (sc_hit) begin utlb_m.valid <= 1; utlb_m.x <= sc_x; end
                 end
@@ -2453,10 +2519,6 @@ always_ff @(posedge clk) begin
             sc_idx <= sc_k; sc_x <= tlb_xlat(tlb_q, sc_va);
             if (sc_mode == SCM_READ) begin              // tlbr: the registers take the entry (tlbr waits in M for this)
                 sc <= SC_DONE;
-                c0_pagemask <= {7'd0, sc_e.mask, 13'd0};
-                c0_entryhi  <= {sc_e.vpn, 5'd0, sc_e.asid};
-                c0_entrylo0 <= {sc_e.lo0, sc_e.g};
-                c0_entrylo1 <= {sc_e.lo1, sc_e.g};
             end
             else if (sc_match) begin sc_hit <= 1; sc <= SC_DONE; end
             else if (!TLB_EN || sc_k == 5'(TLB_N - 1)) begin sc_hit <= 0; sc <= SC_DONE; end
@@ -2599,5 +2661,153 @@ always_ff @(posedge clk) begin
     end
 end
 
+endmodule
+
+// COP0's registers that only take values: written, never decided on, so their muxes are not on any path of the pipeline's advance
+// (MUX_RESTRUCTURE is on for this module alone of the core's, which holds it off for its clock: the 32-bit registers with two or three
+// sources become clock-enabled registers with a synchronous load, ~200 ALUTs fewer)
+(* altera_attribute = "-name MUX_RESTRUCTURE ON" *)
+module mips_c0r (
+    input  wire         clk, rst,
+    input  wire         step, count_frac,              // Count counts on every second step
+    input  wire  [31:0] m_st_lo, m_epc, m_badv, m_addr,
+    input  wire         m_exc_v,
+    input  wire  [19:0] m_page,                        // the physical page a mapped access went to (mon_badv)
+    input  wire  [11:0] e_mask, input wire [18:0] e_vpn, input wire [7:0] e_asid, input wire [30:0] e_lo0, e_lo1, input wire e_g,    // tlbr's entry
+    // mtc0 to ...
+    input  wire         w_count, w_compare, w_epc_mt, w_eepc_mt, w_bv_mt, w_ctx_hi, w_ctx_lo, w_el0, w_el1, w_pm, w_eh,
+    // an exception: EPC / ErrorEPC; BadVAddr; EntryHi (the tables' fault); mon_badv (the tables' fault, a device behind a mapped page);
+    // a fault with no TLB (BadVAddr, Context's BadVPN2, EntryHi); a TLB exception (the same three)
+    input  wire         x_eepc, x_epc, x_bv, x_eh_r, x_mbv_r, x_mbv_t, x_ma, x_ctx_ma, x_tlbx,
+    input  wire         w_tlbr,
+    output logic [31:0] count, compare, entryhi, entrylo0, entrylo1, ctx, pagemask, badvaddr, epc, errorepc, mon_badv,
+    output wire         cnt_hit                        // Count + 1 is Compare, as Count counts
+);
+assign cnt_hit = count_frac && (count + 32'd1 == compare);
+always_ff @(posedge clk) begin
+    if (rst) begin
+        count <= 0; compare <= 0; entryhi <= 0; entrylo0 <= 0; entrylo1 <= 0; pagemask <= 0; ctx <= 0; epc <= 0; errorepc <= 0; badvaddr <= 0;
+    end else begin
+        if (step && count_frac) count <= count + 32'd1;
+        // an exception
+        if (x_eepc) errorepc <= m_epc;
+        if (x_epc) epc <= m_epc;
+        if (x_bv) badvaddr <= m_badv;
+        if (x_eh_r) entryhi <= (m_badv & 32'hFFFFE000) | (entryhi & 32'hFF);
+        if (x_mbv_r) mon_badv <= m_exc_v ? m_badv : m_addr;
+        if (x_mbv_t) mon_badv <= {m_page, m_addr[11:0]};
+        if (x_ma) begin
+            badvaddr <= m_addr;
+            if (x_ctx_ma) ctx <= (ctx & 32'hFF800000) | ((m_addr >> 13) << 4);
+            entryhi <= (m_addr & 32'hFFFFE000) | (entryhi & 32'hFF);
+        end
+        if (x_tlbx) begin                              // BadVAddr, Context's BadVPN2 and EntryHi's VPN2 take the address
+            badvaddr <= m_badv;
+            ctx <= (ctx & 32'hFF800000) | ((m_badv >> 13) << 4);
+            entryhi <= (m_badv & 32'hFFFFE000) | (entryhi & 32'hFF);
+        end
+        // mtc0 (the VR4300's writable bits: the constant rest is not stored; BadVAddr is the monitor level's, for the TLB exception it
+        // delivers to the game -- and to put the game's back, a state loaded; likewise Context's BadVPN2: the tables' faults do not set it)
+        if (w_count) count <= m_st_lo;
+        if (w_compare) compare <= m_st_lo;
+        if (w_bv_mt) badvaddr <= m_st_lo;
+        if (w_el0) entrylo0 <= m_st_lo & 32'h3FFFFFFF;
+        if (w_el1) entrylo1 <= m_st_lo & 32'h3FFFFFFF;
+        if (w_ctx_hi) ctx[31:23] <= m_st_lo[31:23];
+        if (w_ctx_lo) ctx[22:4] <= m_st_lo[22:4];
+        if (w_pm) pagemask <= m_st_lo & 32'h01FFE000;
+        if (w_eh) entryhi <= m_st_lo & 32'hFFFFE0FF;
+        if (w_epc_mt) epc <= m_st_lo;
+        if (w_eepc_mt) errorepc <= m_st_lo;
+        // tlbr: the registers take the entry (tlbr waits in M for this)
+        if (w_tlbr) begin
+            pagemask <= {7'd0, e_mask, 13'd0};
+            entryhi  <= {e_vpn, 5'd0, e_asid};
+            entrylo0 <= {e_lo0, e_g};
+            entrylo1 <= {e_lo1, e_g};
+        end
+    end
+end
+endmodule
+
+// E's datapath (FAST): the operands from the forwarding (M's and W's results, or the register file's), the adder, the compares, the logic
+// operations, the shifter (one: srl, sra directly, sll as a right shift of the reversed value) and E's result by the kind of the instruction
+// -- registered flags, found as it left D. The core is synthesised with its multiplexers restructured; these paths (a result to the next
+// instruction's operand to a result) are the ones that restructuring lengthens, so the module holds them as written.
+(* altera_attribute = "-name MUX_RESTRUCTURE OFF" *)
+module mips_ealu (
+    input  wire [31:0] m_res, w_res, e_ra, e_rb, e_pc, hi_r, lo_r,
+    input  wire        sa_m, sa_w, sa_r, sb_m, sb_w, sb_r,     // where the operands come from, one-hot: M's result, W's, the register file's
+    input  wire        k_shv, k_sub, sl, sra,                  // the amount is rs's; subtract (and compare); sll; sra
+    input  wire [1:0]  k_grp, input wire [2:0] k_op, input wire k_f,
+    input  wire [15:0] imm, input wire [4:0] shamt,
+    output wire [31:0] a, b, res, output wire [32:0] cs, output wire lt, ltu, eq
+);
+function automatic logic [31:0] rev32(input logic [31:0] v);
+    for (int i = 0; i < 32; i++) rev32[i] = v[31 - i];
+endfunction
+assign a = ({32{sa_m}} & m_res) | ({32{sa_w}} & w_res) | ({32{sa_r}} & e_ra);
+assign b = ({32{sb_m}} & m_res) | ({32{sb_w}} & w_res) | ({32{sb_r}} & e_rb);
+assign cs = {1'b0, a} + {1'b0, b ^ {32{k_sub}}} + 33'(k_sub);
+assign lt  = (a[31] != b[31]) ? a[31] : cs[31];
+assign ltu = !cs[32];
+assign eq  = a == b;
+wire [4:0]  sh  = k_shv ? a[4:0] : shamt;
+wire [32:0] shx = {sra && b[31], sl ? rev32(b) : b};
+wire [32:0] shr = $signed(shx) >>> sh;
+wire [31:0] shv = sl ? rev32(shr[31:0]) : shr[31:0];
+logic [31:0] misc;
+always_comb begin
+    case (k_op)
+    3'd0: misc = a & b;
+    3'd1: misc = a | b;
+    3'd2: misc = a ^ b;
+    3'd3: misc = ~(a | b);
+    3'd4: misc = {imm, 16'd0};
+    3'd5: misc = e_pc + 32'd8;
+    3'd6: misc = hi_r;
+    default: misc = lo_r;
+    endcase
+end
+logic [31:0] r;
+always_comb begin
+    case (k_grp)
+    2'd0: r = cs[31:0];
+    2'd1: r = shv;
+    2'd2: r = misc;
+    default: r = {31'd0, !k_op[0] && (k_f ? ltu : lt)};
+    endcase
+end
+assign res = r;
+endmodule
+
+// The D-cache's hit: the tag RAM's word against the access's physical tag, unless the line was dropped last cycle (tk_*, the index the
+// tag was cleared at), and the two terms of a store that hang on it: the RAM's write enable and the store buffer's. The multiplexers as
+// written: the module's own attribute (see mips_ealu).
+(* altera_attribute = "-name MUX_RESTRUCTURE OFF" *)
+module mips_dchit #(parameter int DC_LOG2 = 9) (
+    input  wire [16:0]       dc_tq,
+    input  wire [15:0]       pa_tag,
+    input  wire              tk_valid,
+    input  wire [DC_LOG2-1:0] tk_idx, idx,
+    input  wire              go,          // a store's word completes this cycle (not a failed sc)
+    input  wire              commit,      // a store's M completes: the store buffer takes it
+    input  wire              cached,
+    output wire              hit, dc_we, sb_we
+);
+assign hit   = dc_tq[16] && dc_tq[15:0] == pa_tag && !(tk_valid && tk_idx == idx);
+assign dc_we = go && cached && hit;
+assign sb_we = commit && cached && hit;
+endmodule
+
+// A register with a clock enable and a synchronous clear: a stage's operand that is zeroed when its source is not the register file's
+// (MUX_RESTRUCTURE is on for this module alone of the core's: the clear is the register's own, not a gate on each bit's data)
+(* altera_attribute = "-name MUX_RESTRUCTURE ON" *)
+module mips_ldr #(parameter int W = 32) (
+    input  wire         clk, en, clr,
+    input  wire [W-1:0] d,
+    output logic [W-1:0] q
+);
+always_ff @(posedge clk) if (en) q <= clr ? '0 : d;
 endmodule
 `default_nettype wire

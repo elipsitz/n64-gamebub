@@ -191,6 +191,9 @@ static inline void x_pt(int32_t *o, const int32_t *b, int m, const int32_t *d)
 
 /* ---- init / state ------------------------------------------------------- */
 
+#ifdef RDP_CTIME
+void (*rdp_span_hook)(const rdp_t *r, int y, int x0, int x1);
+#endif
 void rdp_init(rdp_t *r, void *ctx, rdp_rd16_t rd16, rdp_wr16_t wr16)
 {
     memset(r, 0, sizeof *r);
@@ -953,19 +956,31 @@ rdp_lod_t rdp_lod(uint32_t h, unsigned min_level, unsigned max_level, unsigned p
 }
 
 /* is the LOD computed for this 2-cycle primitive's pixels: TEX_LOD, or the combiner reads LOD_FRACTION (C 13 in a
- * colour, C 0 in an alpha, either cycle). RDP_X_FRAC0 (docs/rdp_exact.md, rule 9): TEX_LOD alone -- without it the
- * fraction reads 0, TEXEL0 of the primitive's tile alone, as the console shows a trilinear combiner on a texture of
- * a level count of 0 whose next tile was never set */
+ * colour, C 0 in an alpha, either cycle). RDP_X_FRAC0 (docs/rdp_exact.md, rule 9) changes the fraction of a magnified
+ * pixel, not whether it is computed: see frac0_pixel */
 static int lod_wanted(const rdp_t *r)
 {
     if (r->other_h & RDP_H_TEX_LOD) return 1;
-#ifdef RDP_X_FRAC0
-    return 0;
-#else
     if (!LOD_FRAC_USED) return 0;
     uint32_t hi = r->combine_hi, lo = r->combine_lo;
     return ((hi >> 15) & 31) == 13 || (hi & 31) == 13 || ((hi >> 9) & 7) == 0 || ((lo >> 18) & 7) == 0;
+}
+
+/* RDP_X_FRAC0 (rule 9): without TEX_LOD, SHARPEN and DETAIL, a magnified pixel -- its steps under a texel -- of a primitive
+ * whose next tile (TEXEL1's) was never set reads LOD_FRACTION as 0, TEXEL0 of the primitive's own tile, where the oracle's
+ * rule gives all ones at a level count of 0 (the next level never blended: TEXEL1 alone, a tile of zeros). A pixel the texture
+ * is minified at (a step of a texel or more), or whose next tile was set, keeps the fraction the LOD gives, all ones past
+ * the last level: the two pictures the console shows are a trilinear combiner on a texture drawn larger than its texels with
+ * the second tile unused (TEXEL0), and one with its second tile set (the LOD's blend, smooth across a step of a texel: a
+ * fraction that jumped from 0 to all ones there drew a seam where two layers of a surface meet). */
+static unsigned frac0_pixel(const rdp_t *r, const rdp_lod_t *L, unsigned tile)
+{
+#ifdef RDP_X_FRAC0
+    if (!(r->other_h & (RDP_H_TEX_LOD | RDP_H_SHARPEN | RDP_H_DETAIL)) && L->magnify && !((r->tile_set >> ((tile + 1u) & 7u)) & 1u)) return 0;
+#else
+    (void)r; (void)tile;
 #endif
+    return L->frac;
 }
 
 /* The pixel's LOD: S, T at the pixel (at), at the next pixel of the walk and on the next line, each taken as the pixel's
@@ -1257,8 +1272,10 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
             while (!((row >> (3 - offx)) & 1u)) offx++;
         } else offy = 0;
     }
-    if ((l & RDP_L_Z_SRC_PRIM) || (!pr->zbuf && !pr->xwalk)) {
+    if (l & RDP_L_Z_SRC_PRIM) {
         depth = (uint32_t)r->prim_z << 2;
+    } else if (!pr->zbuf) {
+        depth = 0;                                      /* (no Z coefficients, a rectangle's, a triangle's: Z 0, the nearest) */
     } else {
         const int32_t sz = (at[AZ] >> 10) & 0x3FFFFF;
         const int32_t zc = cvg == 8 ? sz >> 3 : (int32_t)((uint32_t)sz * 4u + (uint32_t)(offx * pr->xcd[4]) + (uint32_t)(offy * pr->xdy[4])) >> 5;
@@ -1346,7 +1363,7 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         if (cyc == 0 && pr->level == 0 && !(h & (RDP_H_SHARPEN | RDP_H_DETAIL))) in.lodf = 0xFF;
         if (cyc == 1 && lod_wanted(r)) {
             const rdp_lod_t L = lod_pixel(r, pr, at);
-            in.lodf = L.frac;
+            in.lodf = frac0_pixel(r, &L, (unsigned)pr->tile);
             tile0 = L.tile0; tile1 = L.tile1;
             if ((h & RDP_H_TEX_LOD) && pr->tex && cvg) {
                 r->lod_px++; r->lod_lvl[L.level & 7]++;
@@ -1920,6 +1937,9 @@ static void draw_triangle_aa(rdp_t *r, const prim_t *pr, int aa_en, int lft, int
         if (!any || !sc_row(r, y)) continue;
         if (xmax > sc_x1(r) - 1) xmax = sc_x1(r) - 1;      /* (the pixel at the scissor's end never has a sample) */
         if (xmin > xmax) continue;
+#ifdef RDP_CTIME
+        if (rdp_span_hook) rdp_span_hook(r, y, xmin, xmax);
+#endif
         int32_t dx0 = (int32_t)((uint32_t)xmin << 16) - exh;
         int32_t cur[NATTR];
         for (int i = 0; i < NATTR; i++) {
@@ -2411,6 +2431,9 @@ static void draw_texrect(rdp_t *r, const uint32_t *w, int flip)
 #endif
     for (int y = ya; y < yb; y++)
         for (int x = xa; x < xb && sc_row(r, y); x++) {
+#ifdef RDP_CTIME
+            if (x == xa && rdp_span_hook) rdp_span_hook(r, y, xa, xb - 1);
+#endif
             int32_t at[NATTR] = { 0 };
             int32_t cq = q ? 4 * x - xh : x - x0;     /* columns from XH: quarters, or whole ones */
             int cs = q ? 2 : 0;
@@ -2464,8 +2487,12 @@ static void fill_rect(rdp_t *r, const uint32_t *w)
     int ya = y0 > sc_y0(r) ? y0 : sc_y0(r), yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
     int32_t at[NATTR] = { 0 };
     for (int y = ya; y < yb; y++)
-        for (int x = xa; x < xb && sc_row(r, y); x++)
+        for (int x = xa; x < xb && sc_row(r, y); x++) {
+#ifdef RDP_CTIME
+            if (x == xa && rdp_span_hook) rdp_span_hook(r, y, xa, xb - 1);
+#endif
             draw_pixel(r, &pr, x, y, at, 0xFFu);
+        }
 }
 
 /* ---- texture loads ---------------------------------------------------------- */
@@ -2552,7 +2579,11 @@ static void load_block(rdp_t *r, const uint32_t *w)
     const rdp_tile_t *t = &r->tile[(w[1] >> 24) & 7];
     uint32_t uls = (w[0] >> 12) & 0xFFF, ult = w[0] & 0xFFF, lrs = (w[1] >> 12) & 0xFFF;
     if (lrs < uls) return;
-    tmem_load(r, t, timg_addr(r, uls, ult), (uint32_t)t->tmem * 4u, load_words(r, lrs - uls + 1u), w[1] & 0xFFFu, 0);
+    /* the texel count is 12 bits wide: a block of 4,096 texels (lrs - uls + 1 = 0x1000) is a count of 0 and loads nothing, so that the TLUT and
+     * whatever else TMEM holds are not overwritten (a game that loads its sky in strips ends a load of that kind with lrs = 0xFFF) */
+    const uint32_t n = (lrs - uls + 1u) & 0xFFFu;
+    if (!n) return;
+    tmem_load(r, t, timg_addr(r, uls, ult), (uint32_t)t->tmem * 4u, load_words(r, n), w[1] & 0xFFFu, 0);
 }
 /* LOAD TLUT: 16-bit entries uls .. lrs of the texture image, each four times over (a 64-bit word of TMEM) */
 static void load_tlut(rdp_t *r, const uint32_t *w)
@@ -2582,6 +2613,7 @@ static void load_tile_n64(rdp_t *r, const uint32_t *w)
 static void set_tile(rdp_t *r, const uint32_t *w)
 {
     rdp_tile_t *t = &r->tile[(w[1] >> 24) & 7];
+    r->tile_set |= (uint8_t)(1u << ((w[1] >> 24) & 7));
     t->fmt = (w[0] >> 21) & 7;
     t->line = (w[0] >> 9) & 0x1FF;
 #ifdef RDP_N64

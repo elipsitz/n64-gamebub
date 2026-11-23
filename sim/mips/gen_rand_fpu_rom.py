@@ -10,7 +10,7 @@ their branches, the moves to and from the integer registers, FCR31's
 rounding mode, and loads and stores of both sizes through the cache and
 around it.
 
-    gen_rand_fpu_rom.py SEED OUT.z64 [N instructions, default 120000] [w64] [irq]
+    gen_rand_fpu_rom.py SEED OUT.z64 [N instructions, default 120000] [w64] [irq] [d64] [fr1]
 
 "w64" adds the 64-bit side of COP1 (dmtc1 and dmfc1 through a 64-bit integer loaded from memory, cvt.s.l, cvt.d.l and the
 conversions to a 64-bit integer, on integers of every size class); a build whose model leaves 64-bit instructions to the
@@ -18,6 +18,11 @@ runtime (TB_NO64) cannot run them.
 
 "irq" turns the VI's interrupt on, every line (some 6,000 instructions), so that it comes in the middle of an FPU operation (the
 model is told when the core takes it).
+"fr1" runs with Status.FR set: 32 registers of 64 bits (a double in any register, loaded by ldc1 or dmtc1, its halves not a pair
+of registers). Without it Status.FR is clear (the pairs), whatever the IPL left in it.
+"d64" is for the core's FPD64 level (add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d exact doubles; TB_FPD64=1): most of the
+arithmetic and compares are on doubles that are loaded just before, a second operand made to cancel, tie, reach the first's exponent
+or its rounding boundary, with the exponents near the smallest and the largest normal as well as the middle.
 """
 import random
 import struct
@@ -43,6 +48,8 @@ def main():
     n = int(sys.argv[3]) if len(sys.argv) > 3 else 120000
     w64 = "w64" in sys.argv[4:]
     irq = "irq" in sys.argv[4:]
+    d64 = "d64" in sys.argv[4:]
+    fr1 = "fr1" in sys.argv[4:]
     rnd = random.Random(seed)
     code = []
     emit = code.append
@@ -67,7 +74,7 @@ def main():
         return rnd.getrandbits(64)
 
     freg = lambda: rnd.randrange(32)
-    dreg = lambda: rnd.randrange(16) * 2
+    dreg = (lambda: rnd.randrange(32)) if fr1 else (lambda: rnd.randrange(16) * 2)
     mtc1 = lambda rt, fs: emit(C1 | 4 << 21 | rt << 16 | fs << 11)
     mfc1 = lambda rt, fs: emit(C1 | 0 << 21 | rt << 16 | fs << 11)
     op = lambda fmt, ft, fs, fd, fn: emit(C1 | fmt << 21 | ft << 16 | fs << 11 | fd << 6 | fn)
@@ -76,22 +83,68 @@ def main():
         li32(T0, fval()); mtc1(T0, freg() if f is None else f)
 
     def set_d(f=None):
-        f = dreg() if f is None else f
-        v = dval()
-        li32(T0, v & 0xFFFFFFFF); mtc1(T0, f)           # the pair: the even register the low half
-        li32(T0, v >> 32); mtc1(T0, f + 1)
+        set_dv(dreg() if f is None else f, dval())
 
     li32(UNC, SCRATCH | 0x20000000)
     li32(CACHED, SCRATCH)
+    li32(T0, 0x24000000 if fr1 else 0x20000000); emit(0x40800000 | T0 << 16 | 12 << 11)         # mtc0 Status: CU1 (FR: fr1)
     if irq:                                     # the VI's interrupt every line (some 6,000 instructions), a handler that acknowledges it
         for i, w in enumerate([0x3C1AA440, 0xAF40_0010, 0x42000018, 0]):             # lui k0, 0xA440; sw zero, 0x10(k0); eret
             li32(T0, w); li32(T1, 0xA0000180 + 4 * i); I(0x2B, T1, T0, 0)
         for a_, v_ in [(0xA4400018, 1), (0xA440000C, 1), (0xA430000C, 0x80)]:       # VI_V_SYNC, VI_V_INTR, MI_MASK (set VI)
             li32(T0, v_); li32(T1, a_); I(0x2B, T1, T0, 0)
-        li32(T0, 0x20000401); emit(0x40800000 | T0 << 16 | 12 << 11)               # mtc0 Status: CU1, IM2, IE
+        li32(T0, 0x20000401 | (0x04000000 if fr1 else 0)); emit(0x40800000 | T0 << 16 | 12 << 11)               # mtc0 Status: CU1, IM2, IE
     for f in range(32): set_s(f)
 
+    def dpair():                                # a double and a second one that makes it hard: cancels, ties, close, far
+        k = rnd.randrange(12)
+        if k < 3: e = rnd.randrange(1020, 1030)
+        elif k < 5: e = rnd.randrange(1, 60)
+        elif k < 7: e = rnd.randrange(1990, 2047)
+        elif k < 9: e = rnd.randrange(480, 560)
+        else: e = rnd.randrange(1, 2047)
+        f = rnd.choice([rnd.getrandbits(52), rnd.getrandbits(52), rnd.getrandbits(rnd.randrange(1, 53)),
+                        (1 << 52) - 1 - rnd.getrandbits(rnd.randrange(1, 53)), 0, 1, (1 << 51)])
+        x = rnd.getrandbits(1) << 63 | e << 52 | f
+        m = rnd.randrange(10)
+        if m == 0: y = x ^ (1 << 63)                                           # x - x, x + -x
+        elif m == 1: y = (x + rnd.randrange(-3, 4)) & ((1 << 64) - 1)          # one ulp off: cancellation
+        elif m == 2: y = (x & (1 << 63)) | (min(2046, max(1, e + rnd.randrange(-3, 4))) << 52) | rnd.getrandbits(52)   # near
+        elif m == 3: y = (rnd.getrandbits(1) << 63) | (min(2046, max(1, e - 53 + rnd.randrange(-3, 4))) << 52) | rnd.getrandbits(52)   # at the guard bits
+        elif m == 4: y = (rnd.getrandbits(1) << 63) | (min(2046, max(1, e - rnd.randrange(54, 70))) << 52) | rnd.getrandbits(52)    # far below
+        elif m == 5: y = (rnd.getrandbits(1) << 63) | (min(2046, max(1, 1023 * 2 - e + rnd.randrange(-2, 3))) << 52) | rnd.getrandbits(52)   # a product near 1
+        elif m == 6: y = (rnd.getrandbits(1) << 63) | (min(2046, max(1, 1023 - e + rnd.randrange(-2, 3))) << 52) | rnd.getrandbits(52)       # a product near the smallest normal
+        else: y = dval()
+        return x, y
+
+    def set_dv(f, v):
+        if fr1:                                 # one register: through memory (the cache's line the scratch words are in)
+            off = rnd.randrange(0, 512, 8)
+            li32(T0, v >> 32); I(0x2B, CACHED, T0, off)
+            li32(T0, v & 0xFFFFFFFF); I(0x2B, CACHED, T0, off + 4)
+            I(0x35, CACHED, f, off)
+            return
+        li32(T0, v & 0xFFFFFFFF); mtc1(T0, f)           # the pair: the even register the low half
+        li32(T0, v >> 32); mtc1(T0, f + 1)
+
+    def d64_arith():
+        x, y = dpair()
+        a, b = dreg(), dreg()
+        set_dv(a, x); set_dv(b, y)
+        k = rnd.random()
+        if k < 0.85: fn = rnd.choice([0, 1, 2, 0, 1, 2, 5, 7])
+        else: fn = 0x30 + rnd.randrange(16)
+        if fn >= 0x30:
+            op(0x11, b, a, 0, fn)
+            emit(C1 | 8 << 21 | rnd.randrange(4) << 16 | 1)              # bc1f / bc1t over the next instruction
+            op(0x11, dreg(), dreg(), dreg(), rnd.choice([0, 1, 2]))
+        else:
+            op(0x11, b, a, dreg(), fn)
+
     def arith():
+        if d64 and rnd.random() < 0.8:
+            d64_arith()
+            return
         d = rnd.random() < 0.4
         fmt, r = (0x11, dreg) if d else (0x10, freg)
         fn = rnd.choice([0, 0, 1, 1, 2, 2, 3, 4, 5, 6, 7])
@@ -167,7 +220,7 @@ def main():
             e = rnd.randrange(100, 158)
             if d:
                 v = rnd.getrandbits(1) << 63 | (e + 896) << 52 | rnd.getrandbits(52)
-                li32(T0, v & 0xFFFFFFFF); mtc1(T0, fs); li32(T0, v >> 32); mtc1(T0, fs + 1)
+                set_dv(fs, v)
             else:
                 li32(T0, rnd.getrandbits(1) << 31 | e << 23 | rnd.getrandbits(23)); mtc1(T0, fs)
             op(0x11 if d else 0x10, 0, fs, dreg(), rnd.choice([0x08, 0x09, 0x0A, 0x0B, 0x25]))
