@@ -39,8 +39,7 @@ class N64Core extends Module with Core {
     )
     val audio = new AudioV0()
     val host = new HostV0()
-    val input = new InputExtendedV0(numSlots = 4)
-    val vibrate = new VibrateV0()
+    val input = new InputExtendedV0(numSlots = 4, hasRumble = true)
     val cartridge = new CartridgePortV0()
     val sdram = new SdramV0(
       addressWidth = 13,

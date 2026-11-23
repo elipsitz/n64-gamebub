@@ -1,5 +1,5 @@
 // Game Bub Host Bridge
-// Connects Game Bub's HostV0, InputExtendedV0(4), VibrateV0, and AudioV0
+// Connects Game Bub's HostV0, InputExtendedV0(4, hasRumble = true), and AudioV0
 // interfaces to Mirlo's MIPS SoC (mirlo_mips / mirlo_regs) and external
 // SDRAM (64 MiB) + SRAM (512 KiB) ports.
 `default_nettype none
@@ -133,9 +133,16 @@ module gb_host_bridge (
     input  wire logic [7:0]  input_slots_3_analog_leftTrigger,
     input  wire logic [7:0]  input_slots_3_analog_rightTrigger,
 
-    // VibrateV0 + Rumble state from mirlo_regs INTERACT2[30]
+    // InputExtendedV0 Rumble outputs + Rumble state from mirlo_regs INTERACT2[30]
     input  wire logic        rumble_motor_on,
-    output wire logic [1:0]  vibrate_mode,
+    output wire logic [7:0]  input_rumble_0_strong,
+    output wire logic [7:0]  input_rumble_0_weak,
+    output wire logic [7:0]  input_rumble_1_strong,
+    output wire logic [7:0]  input_rumble_1_weak,
+    output wire logic [7:0]  input_rumble_2_strong,
+    output wire logic [7:0]  input_rumble_2_weak,
+    output wire logic [7:0]  input_rumble_3_strong,
+    output wire logic [7:0]  input_rumble_3_weak,
 
     // AudioV0 (signed 16-bit stereo @ exact 48,000 Hz)
     output logic signed [15:0] audio_left,
@@ -910,9 +917,16 @@ module gb_host_bridge (
     end
 
     // =========================================================================
-    // 3. VibrateV0 Output
+    // 3. InputExtendedV0 Rumble Output (Player 1 Rumble Pak -> Slot 0 strong)
     // =========================================================================
-    assign vibrate_mode = (core_running && core_focused && rumble_motor_on) ? 2'd1 : 2'd0;
+    assign input_rumble_0_strong = (core_running && core_focused && rumble_motor_on) ? 8'hFF : 8'h00;
+    assign input_rumble_0_weak   = 8'h00;
+    assign input_rumble_1_strong = 8'h00;
+    assign input_rumble_1_weak   = 8'h00;
+    assign input_rumble_2_strong = 8'h00;
+    assign input_rumble_2_weak   = 8'h00;
+    assign input_rumble_3_strong = 8'h00;
+    assign input_rumble_3_weak   = 8'h00;
 
     // =========================================================================
     // 4. AudioV0 512-Word Block RAM Ring Buffer & Exact 48,000 Hz Pacer

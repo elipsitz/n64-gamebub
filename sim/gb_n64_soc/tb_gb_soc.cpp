@@ -588,7 +588,7 @@ static void step_half_sys(bool sys_edge) {
         g_prev_hblank = hb;
 
         if (dut->audio_left != 0 || dut->audio_right != 0) g_nonzero_audio++;
-        if (dut->vibrate_mode != 0) g_vibrate_cycles++;
+        if (dut->rumble_strong_0 != 0) g_vibrate_cycles++;
         if (g_wav_en) {
             g_wav_acc += 12;
             if (g_wav_acc >= 15625) {
@@ -834,7 +834,7 @@ int main(int argc, char **argv) {
             TEST_ERR("N64 AI -> AudioV0 stereo playback silent (%ld)", g_nonzero_audio);
         }
         if (pak_setting == 2 && g_vibrate_cycles < 50) {
-            TEST_ERR("Rumble Pak motor write 0xC000 did not assert VibrateV0 (%ld)", g_vibrate_cycles);
+            TEST_ERR("Rumble Pak motor write 0xC000 did not assert InputExtendedV0 rumble (%ld)", g_vibrate_cycles);
         }
         if (dut->tb_cart_bus_err != 0) {
             TEST_ERR("CartridgePortV0 / gb_cart bus timing or contention error count = %u", dut->tb_cart_bus_err);

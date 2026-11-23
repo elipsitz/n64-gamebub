@@ -55,8 +55,8 @@ module gb_soc_tb_top #(
     input  wire logic [15:0] pad_trig_0, // {rt,lt}
     input  wire logic [15:0] pad_btns_1,
 
-    // VibrateV0
-    output wire logic [1:0]  vibrate_mode,
+    // InputExtendedV0 Rumble (Slot 0 strong motor)
+    output wire logic [7:0]  rumble_strong_0,
 
     // CartridgePortV0 simulation controls & telemetry
     input  wire logic        tb_cart_switch,
@@ -233,7 +233,14 @@ module gb_soc_tb_top #(
             .input_slots_3_analog_leftTrigger   (8'd0),
             .input_slots_3_analog_rightTrigger  (8'd0),
 
-            .vibrate_mode                       (vibrate_mode),
+            .input_rumble_0_strong              (rumble_strong_0),
+            .input_rumble_0_weak                (),
+            .input_rumble_1_strong              (),
+            .input_rumble_1_weak                (),
+            .input_rumble_2_strong              (),
+            .input_rumble_2_weak                (),
+            .input_rumble_3_strong              (),
+            .input_rumble_3_weak                (),
 
             .cartridge_enabled                  (cart_enabled),
             .cartridge_switch                   (tb_cart_switch),

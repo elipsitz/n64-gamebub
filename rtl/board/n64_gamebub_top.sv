@@ -6,7 +6,7 @@
 //   1. `n64_mmcm`: single-MMCM 7-clock tree (`VCO = 750.000 MHz`) + runtime
 //      fine-phase shift (`ps_target`) for `sdram_clk`
 //   2. `gb_host_bridge`: `HostV0` (eager + on-demand `0x0400..0x0404`),
-//      `InputExtendedV0(4)`, `VibrateV0` (Rumble Pak), and 48 kHz `AudioV0`
+//      `InputExtendedV0(4, hasRumble = true)`, and 48 kHz `AudioV0`
 //   3. `n64_soc_gb`: VR4300 (`93.75 MHz`) + COP1 FPU + RSP (`LANES=8`) + RDP +
 //      dual-rank 64 MiB `W9825G6KH-6` SDRAM + 512 KiB 10 ns SRAM + L1/L2 PI
 //      ROM cache + `320x240` `RGB666` video scanout/downsampler
@@ -157,8 +157,15 @@ module n64_gamebub_top #(
     input  wire logic [7:0]  input_slots_3_analog_leftTrigger,
     input  wire logic [7:0]  input_slots_3_analog_rightTrigger,
 
-    // VibrateV0
-    output wire logic [1:0]  vibrate_mode,
+    // InputExtendedV0 per-slot dual-motor rumble outputs
+    output wire logic [7:0]  input_rumble_0_strong,
+    output wire logic [7:0]  input_rumble_0_weak,
+    output wire logic [7:0]  input_rumble_1_strong,
+    output wire logic [7:0]  input_rumble_1_weak,
+    output wire logic [7:0]  input_rumble_2_strong,
+    output wire logic [7:0]  input_rumble_2_weak,
+    output wire logic [7:0]  input_rumble_3_strong,
+    output wire logic [7:0]  input_rumble_3_weak,
 
     // CartridgePortV0 (Physical DMG/CGB Transfer Pak slot)
     output wire logic        cartridge_enabled,
@@ -428,7 +435,14 @@ module n64_gamebub_top #(
         .input_slots_3_analog_rightTrigger(input_slots_3_analog_rightTrigger),
 
         .rumble_motor_on                (rumble_motor_on),
-        .vibrate_mode                   (vibrate_mode),
+        .input_rumble_0_strong          (input_rumble_0_strong),
+        .input_rumble_0_weak            (input_rumble_0_weak),
+        .input_rumble_1_strong          (input_rumble_1_strong),
+        .input_rumble_1_weak            (input_rumble_1_weak),
+        .input_rumble_2_strong          (input_rumble_2_strong),
+        .input_rumble_2_weak            (input_rumble_2_weak),
+        .input_rumble_3_strong          (input_rumble_3_strong),
+        .input_rumble_3_weak            (input_rumble_3_weak),
 
         .audio_left                     (audio_left),
         .audio_right                    (audio_right),

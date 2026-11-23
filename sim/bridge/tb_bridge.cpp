@@ -503,9 +503,9 @@ int main(int argc, char** argv) {
     check_eq("host_reset_n in Run", env.dut->apf_bridge_host_reset_n, 1u);
 
     // =========================================================================
-    // Test 4: settings.json + mask RMW + apf_interact + VibrateV0
+    // Test 4: settings.json + mask RMW + apf_interact + InputExtendedV0 Rumble
     // =========================================================================
-    std::printf("[4/7] Testing settings.json register bank, apf_interact, and VibrateV0...\n");
+    std::printf("[4/7] Testing settings.json register bank, apf_interact, and InputExtendedV0 Rumble...\n");
     env.host_write32(0x70000000u, 2u); // Controller 1 Pak = Rumble Pak
     check_eq("ia_regs[2] (Pak)", env.ia_regs[2], 2u);
     check_eq("cfg_reg[0] readback", env.host_read32(0x70000000u), 2u);
@@ -539,19 +539,20 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 20; i++) env.tick();
     check_eq("No continuous overwrite of INTERACT1", env.ia_wr_count, ia_cnt0 + 1);
 
-    // Test VibrateV0 gating with NotifyFocus & CoreRun
+    // Test InputExtendedV0 Rumble gating with NotifyFocus & CoreRun
     env.dut->rumble_motor_on = 1;
     env.tick();
-    check_eq("Vibrate off when unfocused", env.dut->vibrate_mode, 0u);
+    check_eq("Rumble off when unfocused", env.dut->input_rumble_0_strong, 0u);
     env.host_cmd(0x0200, 1); // NotifyFocus(1)
-    check_eq("Vibrate on when running + focused + motor", env.dut->vibrate_mode, 1u);
+    check_eq("Rumble on when running + focused + motor", env.dut->input_rumble_0_strong, 255u);
+    check_eq("Rumble weak motor idle", env.dut->input_rumble_0_weak, 0u);
     env.host_cmd(0x0101); // CoreHalt
-    check_eq("Vibrate off when halted", env.dut->vibrate_mode, 0u);
+    check_eq("Rumble off when halted", env.dut->input_rumble_0_strong, 0u);
     env.host_cmd(0x0100); // CoreRun
-    check_eq("Vibrate back on when running", env.dut->vibrate_mode, 1u);
+    check_eq("Rumble back on when running", env.dut->input_rumble_0_strong, 255u);
     env.dut->rumble_motor_on = 0;
     env.tick();
-    check_eq("Vibrate off when motor cleared", env.dut->vibrate_mode, 0u);
+    check_eq("Rumble off when motor cleared", env.dut->input_rumble_0_strong, 0u);
 
     // =========================================================================
     // Test 5: InputExtendedV0(4) -> pad_wa / pad_wd Scanner
