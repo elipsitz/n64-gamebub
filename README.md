@@ -1,5 +1,11 @@
 # Nintendo 64 for Game Bub (`elipsitz.N64`)
 
+> [!WARNING]
+> **Unofficial / Unsupported Proof of Concept**
+> - **This is NOT an official Game Bub project.**
+> - **This core is essentially an AI slop proof of concept** put together to demonstrate that Nintendo 64 can run on the Game Bub hardware.
+> - **No support is provided.** Use at your own risk — bug reports, compatibility requests, and support questions will not be answered.
+
 A Nintendo 64 FPGA core for the **Game Bub Rev4** handheld (`XC7A100TCSG324-1`), porting the clean-room [MIRLO64](https://github.com/tortugaveloz/MIRLO64) `v1.0` core (`Apache-2.0`) onto [`gamebub/framework`](https://github.com/gamebub/framework) (`v1.1.0-beta5`).
 
 ## Features
