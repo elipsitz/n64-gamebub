@@ -8,7 +8,7 @@ VERILATOR="${VERILATOR:-verilator}"
 BUILD_DIR="${BUILD_DIR:-/tmp/gb_n64_soc_sim}"
 mkdir -p "$BUILD_DIR"
 
-echo "=== [1/4] Building guest N64 test ROMs (.z64, .v64, .n64, and 64 MiB .z64) ==="
+echo "=== [1/3] Building guest N64 test ROMs (.z64, .v64, .n64, and 64 MiB .z64) ==="
 mips-linux-gnu-gcc -EB -march=vr4300 -mabi=32 -mno-abicalls -fno-pic -G0 \
     -ffreestanding -O2 -Wall -Wextra \
     -c sim/gb_n64_soc/n64_guest_rom.c -o "$BUILD_DIR/n64_guest_rom.o"
@@ -29,7 +29,6 @@ COMMON_RTL=(
 N64_RTL=(
     "${COMMON_RTL[@]}"
     rtl/board/n64_gamebub_top.sv
-    rtl/diag/n64_mem_diag_top.sv
     rtl/bridge/gb_host_bridge.sv
     rtl/video_gb/n64_video_gb_downsampler.sv
     rtl/mips/fpu_d64.sv
@@ -70,7 +69,7 @@ VFLAGS=(
     --cc --exe --build -j 8
     -O3 --x-assign 0 --x-initial 0
     -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM
-    -Wno-PINCONNECTEMPTY -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-PROCASSINIT
+    -Wno-PINCONNECTEMPTY -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST
     -Irtl/soc -Irtl/rsp -Irtl/rdp -Irtl/mips
     -CFLAGS "-O3 -std=c++17"
     --top-module gb_soc_tb_top
@@ -78,24 +77,15 @@ VFLAGS=(
 
 cp -f rtl/rsp/rsp_div_rom.hex .
 
-echo "=== [2/4] Verifying Deliverable #1 (N64MemDiagCore) & Deliverable #2 (N64SelfTestCore) ==="
-"$VERILATOR" "${VFLAGS[@]}" -GDIAG_CORE_MODE=1 --Mdir "$BUILD_DIR/obj_diag" \
-    "${N64_RTL[@]}" "$ROOT/sim/gb_n64_soc/tb_gb_soc.cpp" -o tb_diag
-"$BUILD_DIR/obj_diag/tb_diag" --mode diag
-
-"$VERILATOR" "${VFLAGS[@]}" -GSELF_TEST_MODE=1 --Mdir "$BUILD_DIR/obj_selftest" \
-    "${N64_RTL[@]}" "$ROOT/sim/gb_n64_soc/tb_gb_soc.cpp" -o tb_selftest
-"$BUILD_DIR/obj_selftest/tb_selftest" --mode selftest
-
-echo "=== [3/4] Building N64Core Full-SoC Simulator & Running Hardware Regression Suite ==="
-"$VERILATOR" "${VFLAGS[@]}" -GDIAG_CORE_MODE=0 -GSELF_TEST_MODE=0 --Mdir "$BUILD_DIR/obj_n64" \
+echo "=== [2/3] Building N64Core Full-SoC Simulator & Running Hardware Regression Suite ==="
+"$VERILATOR" "${VFLAGS[@]}" --Mdir "$BUILD_DIR/obj_n64" \
     "${N64_RTL[@]}" "$ROOT/sim/gb_n64_soc/tb_gb_soc.cpp" -o tb_n64
 
-for t in cpu_test int64_test ddiv64_test ualn_test fpu_d64_test tlbram_test dma_coh_test mi_test vi_test ai_test si_test; do
+for t in cpu_test int64_test ddiv64_test ualn_test fr1_test fpu_d64_test tlbram_test dma_coh_test mi_test pi2_test vi_test ai_test si_test; do
     "$BUILD_DIR/obj_n64/tb_n64" --mode mipstest --file "lang/mips/test/build/${t}.bin"
 done
 
-echo "=== [4/4] Verifying Commercial N64 Boot (.z64/.v64/.n64), .sav/.mpk, Rumble, Transfer Pak, Soft Restart, & 64 MiB On-Demand Paging ==="
+echo "=== [3/3] Verifying Commercial N64 Boot (.z64/.v64/.n64), .sav/.mpk, Rumble, Transfer Pak, Soft Restart, & 64 MiB On-Demand Paging ==="
 "$BUILD_DIR/obj_n64/tb_n64" --mode n64rom     --file "$BUILD_DIR/guest_rom.z64" --pak 1 --test-restart
 "$BUILD_DIR/obj_n64/tb_n64" --mode n64rom     --file "$BUILD_DIR/guest_rom.v64" --pak 2
 "$BUILD_DIR/obj_n64/tb_n64" --mode n64rom     --file "$BUILD_DIR/guest_rom.n64" --pak 1

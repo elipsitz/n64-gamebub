@@ -736,71 +736,9 @@ int main(int argc, char **argv) {
     }
 
     // ------------------------------------------------------------------------
-    // MODE A: `N64MemDiagCore` (`DIAG_CORE_MODE = 1`)
+    // MODE A: MIPS Hardware Regression Binary (`cpu_test`, `mi_test`, etc.)
     // ------------------------------------------------------------------------
-    if (mode == "diag") {
-        host_mem_wr(0x7000002Cu, 6u); // Phase shift +6 steps
-        host_cmd(0x0102u);            // SetupComplete
-        host_cmd(0x0100u);            // CoreRun
-        dut->pad_btns_0 = 0x0002u;    // Hold B to activate 440 Hz tone + VibrateV0
-
-        long limit = 3500000L;
-        while (g_sys < limit && dut->tb_diag_pass_cnt < 1) {
-            step_sys_cycle();
-        }
-        if (!dump_ppm.empty() && dut->tb_diag_pass_cnt >= 1) {
-            long target_f = g_vid_frames + 2;
-            long flim = g_sys + 2500000L;
-            while (g_sys < flim && g_vid_frames < target_f) step_sys_cycle();
-        }
-        if (dut->tb_diag_pass_cnt < 1) TEST_ERR("N64MemDiagCore did not complete pass 1");
-        if (dut->tb_diag_any_err != 0) TEST_ERR("N64MemDiagCore reported hardware errors: 0x%x", dut->tb_diag_any_err);
-        if ((int8_t)dut->tb_mmcm_ps_cur != 6) TEST_ERR("MMCM phase shift target mismatch: got %d want 6", (int8_t)dut->tb_mmcm_ps_cur);
-        if (g_vid_frames < 1 || g_last_frame_pixels != 320 * 240)
-            TEST_ERR("N64MemDiagCore video frame check failed (frames=%ld px=%ld)", g_vid_frames, g_last_frame_pixels);
-        if (g_nonzero_audio < 10) TEST_ERR("N64MemDiagCore audio tone silent");
-        if (g_vibrate_cycles < 100) TEST_ERR("N64MemDiagCore vibrate motor did not assert");
-
-        if (g_ac_errors == 0 && g_test_errors == 0) {
-            printf("[PASS] N64MemDiagCore: pass_cnt=%u err=0 ps_cur=%d frames=%ld px=%ld audio=%ld vib=%ld ac_err=%ld\n",
-                   dut->tb_diag_pass_cnt, (int8_t)dut->tb_mmcm_ps_cur, g_vid_frames, g_last_frame_pixels,
-                   g_nonzero_audio, g_vibrate_cycles, g_ac_errors);
-        }
-    }
-
-    // ------------------------------------------------------------------------
-    // MODE B: `N64SelfTestCore` (`SELF_TEST_MODE = 1`, zero SD files!)
-    // ------------------------------------------------------------------------
-    else if (mode == "selftest") {
-        host_cmd(0x0102u);            // SetupComplete (no FileWriteStart!)
-        host_cmd(0x0100u);            // CoreRun
-        host_cmd(0x0200u, 1u);        // NotifyFocus(1)
-        dut->pad_btns_0 = 0x0001u;    // Hold A on Slot 0 -> triggers Rumble Pak bit
-
-        long limit = 4500000L;
-        while (g_sys < limit && g_uart_log.find("SELFTEST PASS") == std::string::npos) {
-            if (g_uart_log.find("SELFTEST FAIL") != std::string::npos) break;
-            step_sys_cycle();
-        }
-        if (g_uart_log.find("SELFTEST PASS") == std::string::npos)
-            TEST_ERR("N64SelfTestCore did not print SELFTEST PASS (pc=0x%08x w0=0x%08x w2=0x%08x uart='%s')",
-                     dut->tb_cpu_pc, sdr_peek_word(0), sdr_peek_word(2), g_uart_log.c_str());
-        if (g_vid_frames < 2 || g_last_frame_pixels != 320 * 240 || g_nonblack_pixels < 10000)
-            TEST_ERR("N64SelfTestCore video check failed (frames=%ld px=%ld nonblack=%ld)",
-                     g_vid_frames, g_last_frame_pixels, g_nonblack_pixels);
-        if (g_nonzero_audio < 20) TEST_ERR("N64SelfTestCore 48 kHz audio silent (%ld)", g_nonzero_audio);
-        if (g_vibrate_cycles < 100) TEST_ERR("N64SelfTestCore VibrateV0 did not assert (%ld)", g_vibrate_cycles);
-
-        if (g_ac_errors == 0 && g_test_errors == 0) {
-            printf("[PASS] N64SelfTestCore: frames=%ld px_per_frame=%ld nonblack=%ld audio_samples=%ld vibrate_cycs=%ld ac_err=%ld\n",
-                   g_vid_frames, g_last_frame_pixels, g_nonblack_pixels, g_nonzero_audio, g_vibrate_cycles, g_ac_errors);
-        }
-    }
-
-    // ------------------------------------------------------------------------
-    // MODE C: MIPS Hardware Regression Binary (`cpu_test`, `mi_test`, etc.)
-    // ------------------------------------------------------------------------
-    else if (mode == "mipstest") {
+    if (mode == "mipstest") {
         std::vector<uint8_t> prog;
         if (!load_bin(arg_file.c_str(), prog)) return 1;
         // Load test binary directly at 0x0000_0000 via HostV0 FileWrite

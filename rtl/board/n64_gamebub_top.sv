@@ -1,12 +1,11 @@
 `default_nettype none
 
-// Top-level SystemVerilog wrapper bound to `N64Core` (`SELF_TEST_MODE = 0`)
-// and `N64SelfTestCore` (`SELF_TEST_MODE = 1`) via Chisel `bindExtModule`.
+// Top-level SystemVerilog wrapper bound to `N64Core` via Chisel `bindExtModule`.
 //
 // Integrates:
 //   1. `n64_mmcm`: single-MMCM 7-clock tree (`VCO = 750.000 MHz`) + runtime
 //      fine-phase shift (`ps_target`) for `sdram_clk`
-//   2. `gb_host_bridge`: `HostV0` (eager + Phase-5 `on_demand` `0x0400..0x0404`),
+//   2. `gb_host_bridge`: `HostV0` (eager + on-demand `0x0400..0x0404`),
 //      `InputExtendedV0(4)`, `VibrateV0` (Rumble Pak), and 48 kHz `AudioV0`
 //   3. `n64_soc_gb`: VR4300 (`93.75 MHz`) + COP1 FPU + RSP (`LANES=8`) + RDP +
 //      dual-rank 64 MiB `W9825G6KH-6` SDRAM + 512 KiB 10 ns SRAM + L1/L2 PI
@@ -14,9 +13,7 @@
 module n64_gamebub_top #(
     parameter int DISPLAY_DIVIDER = 25,
     parameter int NUM_SDRAM_CHIPS = 2,
-    parameter int SELF_TEST_MODE  = 0,
     parameter     BOOTROM         = "boot.hex",
-    parameter     SELFTEST_HEX    = "n64_selftest.hex",
     parameter int SDR_T_INIT      = 12600
 ) (
     input  wire logic        clock,
@@ -247,8 +244,7 @@ module n64_gamebub_top #(
     // -------------------------------------------------------------------------
     // 2. Host Bridge <-> SoC Interconnect Wires
     // -------------------------------------------------------------------------
-    wire        sdr_ready_raw, sram_ready;
-    wire        sdr_ready_for_host;
+    wire        sdr_ready, sram_ready;
 
     wire [11:0] apf_audio_buffer_fill;
     wire [31:0] apf_audio_bus_out;
@@ -262,8 +258,7 @@ module n64_gamebub_top #(
     wire [31:0] apf_bridge_data_offset;
     wire [31:0] apf_bridge_file_size;
     wire        apf_bridge_file_size_wr;
-    wire        apf_bridge_host_loaded_br;
-    wire        apf_bridge_host_loaded_soc;
+    wire        apf_bridge_host_loaded;
     wire        apf_bridge_host_reset_n;
     wire [31:0] apf_bridge_length;
     wire [31:0] apf_bridge_new_file_size_data;
@@ -292,11 +287,6 @@ module n64_gamebub_top #(
     wire [31:0] hb_sdr_wdata, hb_sdr_rdata;
     wire [3:0]  hb_sdr_be;
 
-    wire        soc_sdr_valid, soc_sdr_we, soc_sdr_ready, soc_sdr_rvalid, soc_sdr_pending;
-    wire [23:0] soc_sdr_addr;
-    wire [31:0] soc_sdr_wdata, soc_sdr_rdata;
-    wire [3:0]  soc_sdr_be;
-
     wire        h_sram_valid, h_sram_we, h_sram_ack;
     wire [16:0] h_sram_addr;
     wire [31:0] h_sram_wdata, h_sram_rdata;
@@ -314,12 +304,10 @@ module n64_gamebub_top #(
     wire [31:0] dbg_cpu_cause/* verilator public_flat_rd */;
     wire [31:0] dbg_cpu_epc  /* verilator public_flat_rd */;
 
-    gb_host_bridge #(
-        .DIAG_L3_RUMBLE (SELF_TEST_MODE != 0)
-    ) u_host_bridge (
+    gb_host_bridge u_host_bridge (
         .clk                            (clock),
         .rst                            (reset),
-        .sdr_ready                      (sdr_ready_for_host),
+        .sdr_ready                      (sdr_ready),
         .sram_ready                     (sram_ready),
 
         .host_mem_enable                (host_mem_enable),
@@ -457,7 +445,7 @@ module n64_gamebub_top #(
         .apf_bridge_data_offset         (apf_bridge_data_offset),
         .apf_bridge_file_size           (apf_bridge_file_size),
         .apf_bridge_file_size_wr        (apf_bridge_file_size_wr),
-        .apf_bridge_host_loaded         (apf_bridge_host_loaded_br),
+        .apf_bridge_host_loaded         (apf_bridge_host_loaded),
         .apf_bridge_host_reset_n        (apf_bridge_host_reset_n),
         .apf_bridge_length              (apf_bridge_length),
         .apf_bridge_new_file_size_data  (apf_bridge_new_file_size_data),
@@ -509,69 +497,7 @@ module n64_gamebub_top #(
     );
 
     // -------------------------------------------------------------------------
-    // 3. Optional Embedded `N64SelfTestCore` BRAM -> SDRAM Loader
-    //    (Zero LUT/BRAM cost when `SELF_TEST_MODE == 0`)
-    // -------------------------------------------------------------------------
-    generate if (SELF_TEST_MODE != 0) begin : g_selftest_loader
-        localparam int ST_WORDS = 2048; // 8 KiB = 2.0 RAMB36E1s
-
-        (* rom_style = "block" *) logic [31:0] st_rom [0:ST_WORDS-1];
-        initial $readmemh(SELFTEST_HEX, st_rom);
-
-        logic        st_done, st_have_word;
-        logic [10:0] st_idx;
-        logic [31:0] st_word;
-
-        always_ff @(posedge clock) begin
-            st_word <= st_rom[st_idx];
-            if (reset) begin
-                st_done      <= 1'b0;
-                st_have_word <= 1'b0;
-                st_idx       <= 11'd0;
-            end else if (sdr_ready_raw && !st_done) begin
-                if (!st_have_word) begin
-                    st_have_word <= 1'b1;
-                end else if (soc_sdr_ready) begin
-                    st_have_word <= 1'b0;
-                    if (st_idx == 11'(ST_WORDS - 1))
-                        st_done <= 1'b1;
-                    else
-                        st_idx  <= st_idx + 11'd1;
-                end
-            end
-        end
-
-        assign sdr_ready_for_host         = sdr_ready_raw && st_done;
-        assign apf_bridge_host_loaded_soc = 1'b1;
-
-        assign soc_sdr_valid   = st_done ? hb_sdr_valid   : (sdr_ready_raw && st_have_word);
-        assign soc_sdr_we      = st_done ? hb_sdr_we      : 1'b1;
-        assign soc_sdr_addr    = st_done ? hb_sdr_addr    : {13'd0, st_idx};
-        assign soc_sdr_wdata   = st_done ? hb_sdr_wdata   : st_word;
-        assign soc_sdr_be      = st_done ? hb_sdr_be      : 4'hF;
-        assign soc_sdr_pending = st_done ? hb_sdr_pending : 1'b1;
-
-        assign hb_sdr_ready    = st_done && soc_sdr_ready;
-        assign hb_sdr_rvalid   = st_done && soc_sdr_rvalid;
-        assign hb_sdr_rdata    = soc_sdr_rdata;
-    end else begin : g_normal_mode
-        assign sdr_ready_for_host         = sdr_ready_raw;
-        assign apf_bridge_host_loaded_soc = apf_bridge_host_loaded_br;
-
-        assign soc_sdr_valid   = hb_sdr_valid;
-        assign soc_sdr_we      = hb_sdr_we;
-        assign soc_sdr_addr    = hb_sdr_addr;
-        assign soc_sdr_wdata   = hb_sdr_wdata;
-        assign soc_sdr_be      = hb_sdr_be;
-        assign soc_sdr_pending = hb_sdr_pending;
-
-        assign hb_sdr_ready    = soc_sdr_ready;
-        assign hb_sdr_rvalid   = soc_sdr_rvalid;
-        assign hb_sdr_rdata    = soc_sdr_rdata;
-    end endgenerate
-
-    // -------------------------------------------------------------------------
-    // 4. Nintendo 64 SoC (`n64_soc_gb`)
+    // 3. Nintendo 64 SoC (`n64_soc_gb`)
     // -------------------------------------------------------------------------
     wire [1:0] soc_sdram_cke, soc_sdram_cs_n;
     assign sdram_cke = soc_sdram_cke[NUM_SDRAM_CHIPS-1:0];
@@ -588,18 +514,18 @@ module n64_gamebub_top #(
         .clk_vid                        (clk_vid),
         .reset                          (reset),
 
-        .sdr_ready                      (sdr_ready_raw),
+        .sdr_ready                      (sdr_ready),
         .sram_ready                     (sram_ready),
 
-        .br_sdr_valid                   (soc_sdr_valid),
-        .br_sdr_we                      (soc_sdr_we),
-        .br_sdr_addr                    (soc_sdr_addr),
-        .br_sdr_wdata                   (soc_sdr_wdata),
-        .br_sdr_be                      (soc_sdr_be),
-        .br_sdr_ready                   (soc_sdr_ready),
-        .br_sdr_rvalid                  (soc_sdr_rvalid),
-        .br_sdr_rdata                   (soc_sdr_rdata),
-        .br_sdr_pending                 (soc_sdr_pending),
+        .br_sdr_valid                   (hb_sdr_valid),
+        .br_sdr_we                      (hb_sdr_we),
+        .br_sdr_addr                    (hb_sdr_addr),
+        .br_sdr_wdata                   (hb_sdr_wdata),
+        .br_sdr_be                      (hb_sdr_be),
+        .br_sdr_ready                   (hb_sdr_ready),
+        .br_sdr_rvalid                  (hb_sdr_rvalid),
+        .br_sdr_rdata                   (hb_sdr_rdata),
+        .br_sdr_pending                 (hb_sdr_pending),
 
         .h_sram_valid                   (h_sram_valid),
         .h_sram_we                      (h_sram_we),
@@ -623,7 +549,7 @@ module n64_gamebub_top #(
         .apf_bridge_data_offset         (apf_bridge_data_offset),
         .apf_bridge_file_size           (apf_bridge_file_size),
         .apf_bridge_file_size_wr        (apf_bridge_file_size_wr),
-        .apf_bridge_host_loaded         (apf_bridge_host_loaded_soc),
+        .apf_bridge_host_loaded         (apf_bridge_host_loaded),
         .apf_bridge_host_reset_n        (apf_bridge_host_reset_n),
         .apf_bridge_length              (apf_bridge_length),
         .apf_bridge_new_file_size_data  (apf_bridge_new_file_size_data),

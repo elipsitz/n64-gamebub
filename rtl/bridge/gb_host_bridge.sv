@@ -1,12 +1,10 @@
-// Game Bub Host Bridge (Workstream B)
+// Game Bub Host Bridge
 // Connects Game Bub's HostV0, InputExtendedV0(4), VibrateV0, and AudioV0
 // interfaces to Mirlo's MIPS SoC (mirlo_mips / mirlo_regs) and external
 // SDRAM (64 MiB) + SRAM (512 KiB) ports.
 `default_nettype none
 
-module gb_host_bridge #(
-    parameter bit DIAG_L3_RUMBLE = 1'b0
-) (
+module gb_host_bridge (
     input  wire logic        clk,
     input  wire logic        rst,
 
@@ -914,8 +912,7 @@ module gb_host_bridge #(
     // =========================================================================
     // 3. VibrateV0 Output
     // =========================================================================
-    wire diag_rumble = DIAG_L3_RUMBLE && input_slots_0_active && input_slots_0_buttons_l3;
-    assign vibrate_mode = (core_running && core_focused && (rumble_motor_on || diag_rumble)) ? 2'd1 : 2'd0;
+    assign vibrate_mode = (core_running && core_focused && rumble_motor_on) ? 2'd1 : 2'd0;
 
     // =========================================================================
     // 4. AudioV0 512-Word Block RAM Ring Buffer & Exact 48,000 Hz Pacer
