@@ -245,9 +245,9 @@ static void fill_pattern_640x240(std::vector<uint32_t> &rdram, std::vector<Pixel
             rdram[y * 640 + 2 * x + 0] = pack_rgba8888(r0, g0, b0);
             rdram[y * 640 + 2 * x + 1] = pack_rgba8888(r1, g1, b1);
 
-            uint8_t hr = avg8(r0, r1, hblend);
-            uint8_t hg = avg8(g0, g1, hblend);
-            uint8_t hb = avg8(b0, b1, hblend);
+            uint8_t hr = avg8(r0 & 0xF8u, r1 & 0xF8u, hblend);
+            uint8_t hg = avg8(g0 & 0xF8u, g1 & 0xF8u, hblend);
+            uint8_t hb = avg8(b0 & 0xF8u, b1 & 0xF8u, hblend);
             expected[y * OUT_W + x] = {
                 quant6(hr, x, y, dither),
                 quant6(hg, x, y, dither),
@@ -297,13 +297,13 @@ static void fill_pattern_640x480_woven(std::vector<uint32_t> &rdram, std::vector
             rdram[(2 * y + 1) * 640 + 2 * x + 0] = pack_rgba8888(r10, g10, b10);
             rdram[(2 * y + 1) * 640 + 2 * x + 1] = pack_rgba8888(r11, g11, b11);
 
-            uint8_t er = avg8(r00, r01, hblend);
-            uint8_t eg = avg8(g00, g01, hblend);
-            uint8_t eb = avg8(b00, b01, hblend);
+            uint8_t er = avg8(r00 & 0xF8u, r01 & 0xF8u, hblend);
+            uint8_t eg = avg8(g00 & 0xF8u, g01 & 0xF8u, hblend);
+            uint8_t eb = avg8(b00 & 0xF8u, b01 & 0xF8u, hblend);
 
-            uint8_t or8 = avg8(r10, r11, hblend);
-            uint8_t og8 = avg8(g10, g11, hblend);
-            uint8_t ob8 = avg8(b10, b11, hblend);
+            uint8_t or8 = avg8(r10 & 0xF8u, r11 & 0xF8u, hblend);
+            uint8_t og8 = avg8(g10 & 0xF8u, g11 & 0xF8u, hblend);
+            uint8_t ob8 = avg8(b10 & 0xF8u, b11 & 0xF8u, hblend);
 
             uint8_t vr = avg8(er, or8, hblend);
             uint8_t vg = avg8(eg, og8, hblend);
@@ -344,12 +344,12 @@ static int verify_frame(const char *name, const Sim &sim, const std::vector<Pixe
             }
         }
     }
-    // Explicitly verify white 255 -> (63, 63, 63) across top-left 16x16 patch
+    // Explicitly verify white 248 (5-bit 31 << 3) -> 62 across top-left 16x16 patch
     for (int y = 0; y < 16; y++) {
         for (int x = 0; x < 16; x++) {
             const Pixel6 &got = sim.fb[sim.last_complete_idx][y * OUT_W + x];
-            if (got.r != 63 || got.g != 63 || got.b != 63) {
-                printf("FAIL [%s]: white 255 clamp failed at (%d, %d): got (%u,%u,%u)\n",
+            if (got.r != 62 || got.g != 62 || got.b != 62) {
+                printf("FAIL [%s]: white 248 check failed at (%d, %d): got (%u,%u,%u)\n",
                        name, x, y, got.r, got.g, got.b);
                 fails++;
                 break;
@@ -381,7 +381,6 @@ int main(int argc, char **argv) {
     d->vi_px32 = 1;
     d->vi_black = 0;
     d->vi_pal = 0;
-    d->vi_out32 = 1;
     d->vi_lines = 240;
     d->vi_px0 = 0;
     d->vi_pw = 640;

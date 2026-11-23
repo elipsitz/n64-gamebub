@@ -63,12 +63,16 @@ static uint32_t lcg_s = 12345u;
 static uint32_t lcg(void) { lcg_s = lcg_s * 1103515245u + 12345u; return lcg_s >> 8 ^ lcg_s << 13; }
 
 static void pi_wait(void) { for (uint32_t t = 0; t < 4000000u && (monitor_pilen_read() >> 31); t++) { } }
-/* an SDRAM-to-SDRAM copy by the engine (byte addresses; the source may be 2 mod 4) */
+/* an SDRAM/SRAM copy by the engine (byte addresses; the source may be 2 mod 4) */
 static void pi_run(uint32_t dst, uint32_t src, uint32_t bytes)
 {
-    monitor_pidst_write((dst - 0x40000000u) >> 2);
-    monitor_pisrc_write((src - 0x40000000u) >> 2 | ((src >> 1) & 1u) << 24);
-    monitor_pilen_write(((bytes + 3u) >> 2) | (bytes & 3u) << 22);
+    uint32_t ps_dst = ((dst >> 21) == 0x1A0u) ? 1u : 0u;
+    uint32_t ps_src = ((src >> 21) == 0x1A0u) ? 1u : 0u;
+    uint32_t wd = ps_dst ? ((dst & 0x001FFFFFu) >> 2) : ((dst - 0x40000000u) >> 2);
+    uint32_t ws = ps_src ? ((src & 0x001FFFFFu) >> 2) : ((src - 0x40000000u) >> 2);
+    monitor_pidst_write(wd | (ps_dst << 25));
+    monitor_pisrc_write(ws | (((src >> 1) & 1u) << 24) | (ps_src << 25));
+    monitor_pilen_write(((bytes + 3u) >> 2) | ((bytes & 3u) << 22));
     pi_wait();
 }
 static inline uint8_t rd8(uint32_t a) { return *(volatile uint8_t *)(uintptr_t)a; }
@@ -137,7 +141,7 @@ __attribute__((section("pi2game"), noinline, used, optimize("O1"))) void pi2_gam
     res[8] = *(volatile uint32_t *)0xB0000004u;
     *(volatile uint32_t *)0xB0000020u = 0x11111111u;
     res[9] = *(volatile uint32_t *)0xB0000008u;
-    for (volatile int i = 0; i < 400; i++) { }                  /* (the write is over) */
+    for (int i = 0; i < 400; i++) __asm__ volatile("" ::: "memory"); /* (the write is over; keep loop var in a register) */
     res[10] = *(volatile uint32_t *)0xB0000004u;
     res[7] = 1u;
 }
