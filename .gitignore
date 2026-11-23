@@ -1,10 +1,10 @@
 build/
 out/
 dist/
+dist.zip
 *.log
 *.jou
 *.str
 sim/**/obj*
+sim/bridge/build/
 sim/**/*.log
-dist/
-dist.zip

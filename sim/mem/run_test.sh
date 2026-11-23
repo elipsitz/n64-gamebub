@@ -7,7 +7,7 @@ OBJ_DIR="${OBJ_DIR:-/tmp/mem_tb_obj}"
 
 echo "[1/2] Compiling RTL + C++ testbench with Verilator..."
 verilator --cc --exe --build -j 4 \
-    -Wall -Wno-DECLFILENAME -Wno-PROCASSINIT \
+    -Wall -Wno-DECLFILENAME \
     --Mdir "${OBJ_DIR}" \
     --top-module mem_tb_top \
     -CFLAGS "-O2 -std=c++17" \

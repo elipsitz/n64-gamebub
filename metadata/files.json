@@ -7,8 +7,8 @@
       "user_selected": true,
       "optional": false,
       "read_only": true,
-      "address": "0x00100000",
-      "max_size": "0x03400000",
+      "on_demand": true,
+      "max_size": "0x04000000",
       "max_transfer_speed": 20000
     },
     {

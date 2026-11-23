@@ -1,11 +1,13 @@
 {
+  "min_firmware": "1.1.0-beta.5",
   "metadata": {
-    "id": "Eli.N64",
+    "id": "elipsitz.N64",
     "name": "Nintendo 64 (MIRLO64)",
-    "author": "tortugaveloz / Eli",
-    "version": "0.2.0",
-    "release_date": "2026-11-17",
-    "url": "https://github.com/tortugaveloz/MIRLO64",
+    "author": "tortugaveloz, elipsitz",
+    "description": "Nintendo 64 core based on MIRLO64 v1.0",
+    "version": "0.3.0",
+    "release_date": "2026-11-23",
+    "url": "https://github.com/elipsitz/n64-game-bub",
     "license": "Apache-2.0"
   },
   "bitstreams": [

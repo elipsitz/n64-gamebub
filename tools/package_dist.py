@@ -1,63 +1,21 @@
 #!/usr/bin/env python3
-"""Packages verified Game Bub Rev4 N64 FPGA core deliverables under `dist/`.
+"""Packages the Game Bub Rev4 N64 FPGA core (`elipsitz.N64`) as a release .zip.
 
-Each bundle under `dist/<bundle>/cores/<CoreId>/` is a drop-in SD card directory
-containing `core.json`, optional `files.json` & `settings.json`, `<Core>-gamebub_rev4.bit`,
-and (for N64Core) `n64rt.sys` + `n64savedb.txt`, plus a `BUILD_MANIFEST.txt` recording
-Vivado 2023.2 utilization and timing closure (`WNS`, `TNS`, `WHS`, `THS`, `WPWS`).
+Creates `dist/<core_id>-v<version>.zip` containing a single top-level `<core_id>/`
+directory (`elipsitz.N64/`) with `core.json`, `files.json`, `settings.json`,
+`N64Core-gamebub_rev4.bit`, `n64rt.sys`, and `n64savedb.txt`.
 """
 
 import argparse
 import hashlib
+import json
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
-
-BUNDLES = {
-    "01-mem-diag": {
-        "core_id": "GameBub.N64MemDiag",
-        "core_class": "N64MemDiagCore",
-        "core_json": "metadata/mem_diag_core.json",
-        "files_json": None,
-        "settings_json": "metadata/mem_diag_settings.json",
-        "with_runtime": False,
-    },
-    "02-mips-self-test": {
-        "core_id": "GameBub.N64SelfTest",
-        "core_class": "N64SelfTestCore",
-        "core_json": "metadata/self_test_core.json",
-        "files_json": None,
-        "settings_json": None,
-        "with_runtime": False,
-    },
-    "03-n64-core": {
-        "core_id": "Eli.N64",
-        "core_class": "N64Core",
-        "core_json": "metadata/core.json",
-        "files_json": "metadata/files.json",
-        "settings_json": "metadata/settings.json",
-        "with_runtime": True,
-    },
-    "04-n64-polished": {
-        "core_id": "Eli.N64",
-        "core_class": "N64Core",
-        "core_json": "metadata/core.json",
-        "files_json": "metadata/files.json",
-        "settings_json": "metadata/settings.json",
-        "with_runtime": True,
-    },
-    "05-n64-64mb-ondemand": {
-        "core_id": "Eli.N64",
-        "core_class": "N64Core",
-        "core_json": "metadata/core.json",
-        "files_json": "metadata/files_ondemand.json",
-        "settings_json": "metadata/settings.json",
-        "with_runtime": True,
-    },
-}
 
 
 def extract_vivado_metrics(build_dir: Path) -> dict[str, str]:
@@ -110,7 +68,12 @@ def sha256_short(p: Path) -> str:
 
 def refresh_bitstream_gitrev(bit_path: Path, git_rev: str) -> None:
     raw = bytearray(bit_path.read_bytes())
-    new_raw = re.sub(rb";GitRev=[0-9a-fA-F]{12}", b";GitRev=" + git_rev.encode("ascii"), bytes(raw), count=1)
+    new_raw = re.sub(
+        rb";GitRev=[0-9a-fA-F]{12}",
+        b";GitRev=" + git_rev.encode("ascii"),
+        bytes(raw),
+        count=1,
+    )
     if len(new_raw) == len(raw) and new_raw != bytes(raw):
         bit_path.write_bytes(new_raw)
         return
@@ -127,74 +90,75 @@ def refresh_bitstream_gitrev(bit_path: Path, git_rev: str) -> None:
                 bit_path.write_bytes(bytes(raw))
 
 
-def package_one(bundle_name: str) -> None:
-    cfg = BUNDLES[bundle_name]
-    core_class = cfg["core_class"]
-    target = "gamebub_rev4"
-    bit_name = f"{core_class}-{target}.bit"
-    build_dir = ROOT / "build" / f"{core_class}-{target}"
-    src_bit = build_dir / bit_name
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Package elipsitz.N64 release zip.")
+    parser.add_argument(
+        "--build-dir",
+        type=Path,
+        default=ROOT / "build" / "N64Core-gamebub_rev4",
+        help="Path to the Vivado N64Core-gamebub_rev4 build directory",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output .zip path (defaults to dist/<id>-v<version>.zip)",
+    )
+    args = parser.parse_args()
+
+    core_json_path = ROOT / "metadata" / "core.json"
+    core_meta = json.loads(core_json_path.read_text(encoding="utf-8"))
+    core_id = core_meta["metadata"]["id"]
+    version = core_meta["metadata"]["version"]
+    bit_name = core_meta["bitstreams"][0]["filename"]
+
+    src_bit = args.build_dir / bit_name
     if not src_bit.exists():
         raise SystemExit(f"Missing built bitstream: {src_bit}")
 
-    out_root = ROOT / "dist" / bundle_name
-    core_dir = out_root / "cores" / cfg["core_id"]
-    if out_root.exists():
-        shutil.rmtree(out_root)
-    core_dir.mkdir(parents=True, exist_ok=True)
+    rt_bin = ROOT / "lang" / "n64rt" / "build" / "n64rt.bin"
+    if not rt_bin.exists():
+        raise SystemExit(f"Missing built runtime binary: {rt_bin}")
 
-    git_rev = subprocess.check_output(["git", "rev-parse", "--short=12", "HEAD"], cwd=ROOT, text=True).strip()
-    dst_bit = core_dir / bit_name
+    metrics = extract_vivado_metrics(args.build_dir)
+
+    dist_dir = ROOT / "dist"
+    stage_dir = dist_dir / core_id
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
+    stage_dir.mkdir(parents=True, exist_ok=True)
+
+    git_rev = subprocess.check_output(
+        ["git", "rev-parse", "--short=12", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+
+    dst_bit = stage_dir / bit_name
     shutil.copy2(src_bit, dst_bit)
     refresh_bitstream_gitrev(dst_bit, git_rev)
 
-    shutil.copy2(ROOT / cfg["core_json"], core_dir / "core.json")
-    if cfg["files_json"]:
-        shutil.copy2(ROOT / cfg["files_json"], core_dir / "files.json")
-    if cfg["settings_json"]:
-        shutil.copy2(ROOT / cfg["settings_json"], core_dir / "settings.json")
-    if cfg["with_runtime"]:
-        rt_bin = ROOT / "lang" / "n64rt" / "build" / "n64rt.bin"
-        if not rt_bin.exists():
-            raise SystemExit(f"Missing built runtime binary: {rt_bin}")
-        shutil.copy2(rt_bin, core_dir / "n64rt.sys")
-        shutil.copy2(ROOT / "assets" / "n64savedb.txt", core_dir / "n64savedb.txt")
+    shutil.copy2(core_json_path, stage_dir / "core.json")
+    shutil.copy2(ROOT / "metadata" / "files.json", stage_dir / "files.json")
+    shutil.copy2(ROOT / "metadata" / "settings.json", stage_dir / "settings.json")
+    shutil.copy2(rt_bin, stage_dir / "n64rt.sys")
+    shutil.copy2(ROOT / "assets" / "n64savedb.txt", stage_dir / "n64savedb.txt")
 
-    metrics = extract_vivado_metrics(build_dir)
+    zip_path = args.output or (dist_dir / f"{core_id}-v{version}.zip")
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    if zip_path.exists():
+        zip_path.unlink()
 
-    lines = [
-        f"Bundle:      {bundle_name}",
-        f"Core ID:     {cfg['core_id']}",
-        f"Core Class:  {core_class}",
-        f"Target:      {target} (XC7A100TCSG324-1)",
-        f"Git Rev:     {git_rev}",
-        "",
-        "=== Vivado 2023.2 Post-Route Utilization & Timing ===",
-    ]
-    for k, v in metrics.items():
-        lines.append(f"  {k:16s}: {v}")
-    lines.append("")
-    lines.append("=== Packaged Files ===")
-    for p in sorted(core_dir.iterdir()):
-        lines.append(f"  {p.name:38s}  {p.stat().st_size:9d} B  sha256:{sha256_short(p)}")
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        for p in sorted(stage_dir.iterdir()):
+            zf.write(p, arcname=f"{core_id}/{p.name}")
 
-    manifest = out_root / "BUILD_MANIFEST.txt"
-    manifest.write_text("\n".join(lines) + "\n")
-    print(f"[OK] Packaged {bundle_name} -> {core_dir} (WNS={metrics.get('WNS_ns', '?')} ns)")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--bundle", default="n64", choices=["all", "n64", *BUNDLES.keys()])
-    args = parser.parse_args()
-    if args.bundle == "all":
-        targets = list(BUNDLES.keys())
-    elif args.bundle == "n64":
-        targets = [k for k, v in BUNDLES.items() if v["core_class"] == "N64Core"]
-    else:
-        targets = [args.bundle]
-    for b in targets:
-        package_one(b)
+    print(f"[OK] Packaged {core_id} v{version} (git {git_rev}) -> {zip_path}")
+    if metrics:
+        print("=== Vivado 2023.2 Post-Route Utilization & Timing ===")
+        for k, v in metrics.items():
+            print(f"  {k:16s}: {v}")
+    print("=== Packaged Files ===")
+    for p in sorted(stage_dir.iterdir()):
+        print(f"  {core_id}/{p.name:30s}  {p.stat().st_size:9d} B  sha256:{sha256_short(p)}")
 
 
 if __name__ == "__main__":
